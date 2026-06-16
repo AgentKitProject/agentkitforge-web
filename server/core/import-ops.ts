@@ -8,6 +8,8 @@ import { loadCoreMarket } from "@/server/core/load-core";
 import { readTreeFromDir } from "@/server/core/runner";
 import { getKitStore } from "@/server/store/local-disk";
 import { unzipToTree } from "@/server/core/operations";
+import { getWorkosAccessToken } from "@/server/core/market-auth";
+import type { TokenStore } from "@agentkitforge/core/market";
 
 const execFileAsync = promisify(execFile);
 
@@ -48,9 +50,10 @@ export async function importFromMarket(
   params: { slug: string; kitId?: string; marketBaseUrl?: string; clientId?: string }
 ): Promise<{ kitId: string; provenance?: unknown }> {
   const market = await loadCoreMarket();
-  // Tokenless public catalog read + download. The core client returns the zip
-  // bytes; we materialize them straight into a KitStore tree (no user FS).
-  const { bytes, provenance } = await market.downloadKit(makeTokenlessStore() as never, {
+  // Seed the user's WorkOS access token (cookie session) so entitled/private
+  // downloads authenticate; falls back to tokenless for public kits.
+  const store = await createForwardingStore();
+  const { bytes, provenance } = await market.downloadKit(store as never, {
     slug: params.slug,
     kitId: params.kitId,
     marketBaseUrl: params.marketBaseUrl,
@@ -61,23 +64,24 @@ export async function importFromMarket(
   return { kitId: meta.kitId, provenance };
 }
 
-// A no-session TokenStore for public/tokenless Market reads. The hosted
-// authenticated download flow (entitlements, private kits) should instead seed
-// this with the user's WorkOS session — see TODO below.
-//
-// TODO(market-auth): wire the user's WorkOS access token (from the AuthKit
-// session) into a real capture TokenStore so private/entitled downloads work,
-// mirroring market-operation.mjs's createCaptureStore. Public kits work today.
-function makeTokenlessStore() {
+// A TokenStore that forwards the user's WorkOS access token (from the AuthKit
+// cookie session) to the Market client when a session exists, and degrades to a
+// tokenless store for public reads when there is none. This enables
+// entitled/private downloads while keeping public imports working logged-out
+// of any device-auth flow.
+export async function createForwardingStore(): Promise<TokenStore> {
+  const accessToken = await getWorkosAccessToken();
   return {
     async get() {
-      return null;
+      const fresh = await getWorkosAccessToken();
+      const token = fresh ?? accessToken;
+      return token ? { accessToken: token, connectedAt: new Date().toISOString() } : null;
     },
     async set() {
-      /* no-op */
+      /* cookie session owns the token lifecycle */
     },
     async clear() {
-      /* no-op */
+      /* cookie session owns the token lifecycle */
     }
   };
 }

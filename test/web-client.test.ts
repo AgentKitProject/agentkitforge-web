@@ -108,4 +108,89 @@ describe("WebForgeClient endpoint mapping", () => {
     await expect(client.openFolder()).resolves.toBeUndefined();
     await expect(client.markLibraryKitUsed()).resolves.toBeUndefined();
   });
+
+  // --- new parity methods ----------------------------------------------------
+  it("saveAiProvider POSTs /api/settings/ai-provider", async () => {
+    const { client, calls } = makeClient(() => ({ body: { providers: [] } }));
+    await client.saveAiProvider({
+      name: "OpenAI",
+      providerType: "openai",
+      baseUrl: "",
+      apiKey: "sk-1",
+      defaultModel: "gpt-4o",
+      supportsStructuredJson: true
+    });
+    expect(calls[0].url).toBe("/api/settings/ai-provider");
+    expect(calls[0].init?.method).toBe("POST");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ providerType: "openai", apiKey: "sk-1" });
+  });
+
+  it("removeAiProvider DELETEs /api/settings/ai-provider with providerId", async () => {
+    const { client, calls } = makeClient(() => ({ body: { providers: [] } }));
+    await client.removeAiProvider("p1");
+    expect(calls[0].url).toBe("/api/settings/ai-provider");
+    expect(calls[0].init?.method).toBe("DELETE");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ providerId: "p1" });
+  });
+
+  it("setDefaultAiProvider POSTs /api/settings/ai-provider/default", async () => {
+    const { client, calls } = makeClient(() => ({ body: { providers: [] } }));
+    await client.setDefaultAiProvider("p2");
+    expect(calls[0].url).toBe("/api/settings/ai-provider/default");
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ providerId: "p2" });
+  });
+
+  it("testAiProviderConnection POSTs /api/settings/ai-provider/test", async () => {
+    const { client, calls } = makeClient(() => ({ body: { ok: true, model: "gpt-4o", message: "ok" } }));
+    const res = await client.testAiProviderConnection({ providerId: "p1", model: "" });
+    expect(calls[0].url).toBe("/api/settings/ai-provider/test");
+    expect(res.ok).toBe(true);
+  });
+
+  it("generateAgentKitDraftWithAi POSTs /api/drafts/generate", async () => {
+    const { client, calls } = makeClient(() => ({ body: { draftJson: {}, session: {} } }));
+    await client.generateAgentKitDraftWithAi({ userRequest: "make a kit" } as never);
+    expect(calls[0].url).toBe("/api/drafts/generate");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ userRequest: "make a kit" });
+  });
+
+  it("reviseAgentKitDraftWithAi POSTs /api/drafts/revise", async () => {
+    const { client, calls } = makeClient(() => ({ body: { draftJson: {}, session: {} } }));
+    await client.reviseAgentKitDraftWithAi({ session: {}, changeRequest: "tweak" } as never);
+    expect(calls[0].url).toBe("/api/drafts/revise");
+  });
+
+  it("renderGeneratedAgentKitDraft POSTs /api/kits/from-draft and returns kitId", async () => {
+    const { client, calls } = makeClient(() => ({ body: { kit: { kitId: "rendered" } } }));
+    const res = await client.renderGeneratedAgentKitDraft({ draftJson: { name: "x" }, outputFolder: "", force: true });
+    expect(calls[0].url).toBe("/api/kits/from-draft");
+    expect(res.kitId).toBe("rendered");
+  });
+
+  it("checkKitUpdate GETs /api/kits/update-check with query params", async () => {
+    const { client, calls } = makeClient(() => ({ body: { available: true, updateAvailable: true, latestVersion: "2" } }));
+    const res = await client.checkKitUpdate({ slug: "s", marketBaseUrl: "https://m", installedVersion: "1" });
+    expect(calls[0].url).toContain("/api/kits/update-check?");
+    expect(calls[0].url).toContain("slug=s");
+    expect(res.updateAvailable).toBe(true);
+  });
+
+  it("submitHostedMarketKit POSTs /api/market/submit with kitId + listingDraft", async () => {
+    const { client, calls } = makeClient(() => ({ body: { submissionId: "sub1", status: "validation_queued" } }));
+    const res = (await client.submitHostedMarketKit({
+      rootPath: "k1",
+      marketBaseUrl: "",
+      validationProfile: "publishable",
+      listingDraft: { name: "Listing" }
+    } as never)) as { submissionId?: string };
+    expect(calls[0].url).toBe("/api/market/submit");
+    expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({ kitId: "k1", listingDraft: { name: "Listing" } });
+    expect(res.submissionId).toBe("sub1");
+  });
+
+  it("renderAgentKitDraft + summarizeExampleInputDocuments remain desktop-only stubs", async () => {
+    const { client } = makeClient(() => ({ body: {} }));
+    expect(() => client.renderAgentKitDraft()).toThrow(NotAvailableOnWebError);
+    expect(() => client.summarizeExampleInputDocuments()).toThrow(NotAvailableOnWebError);
+  });
 });

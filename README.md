@@ -51,8 +51,31 @@ everything the desktop Forge app does without a local filesystem.
 | `POST /api/import/git` | `importAgentKitFromGit` |
 | `POST /api/import/market` | `importHostedMarketKit` |
 | `GET/POST/DELETE /api/favorites` | favorites (Market refs) |
-| `POST /api/market/licensed` | `fetchLicensedMarketKit` (in-memory preview) |
+| `GET /api/kits/update-check` | `checkKitUpdate` (read-only, tokenless) |
+| `GET /api/settings` · `POST /api/settings` | app settings / preferences |
+| `GET/PUT /api/settings/ai-providers` | per-user AI providers (list/save/remove/default) |
+| `POST/DELETE /api/settings/ai-provider` | `saveAiProvider` / `removeAiProvider` |
+| `POST /api/settings/ai-provider/default` | `setDefaultAiProvider` |
+| `POST /api/settings/ai-provider/test` | `testAiProviderConnection` |
+| `POST/DELETE /api/settings/openai-key` | `saveOpenAiApiKey` / `clearOpenAiApiKey` |
+| `POST /api/market/submit` | `submitHostedMarketKit` (WorkOS bearer from cookie session) |
+| `POST /api/market/licensed` | `fetchLicensedMarketKit` (in-memory preview; entitled via bearer) |
 | `GET /health` | health check (public) |
+
+### Per-user AI providers & Market auth
+
+- **AI provider settings** are stored per user server-side (`server/store/user-settings.ts`).
+  API keys are **encrypted at rest with AES-256-GCM** when `AGENTKITFORGE_WEB_SECRET`
+  is set (a 32-byte hex/base64 key or any passphrase); without it, keys are stored
+  in plaintext and a one-time warning is logged. The GET surface never returns keys
+  (only `hasApiKey`). AI draft generate/revise resolve the **current user's** provider
+  config (default or explicit `providerId`), not a single server env var.
+- **Hosted-Market submit / entitled downloads** authenticate to Market's `/api/forge/*`
+  routes with a **WorkOS bearer access token**. The web user has an AuthKit *cookie*
+  session, so `server/core/market-auth.ts` reads the WorkOS access token from
+  `withAuth()` and wraps it in a `TokenStore` that the core market client consumes
+  (forwarded as the bearer token). The same store powers entitled/private licensed
+  downloads. No automatic publishing — admin review is always required.
 
 ## Run locally
 

@@ -14,9 +14,29 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getForgeClient } from "@/forge-client";
 import type { MyKitEntry, ValidationProfile, ValidationReport } from "@/forge-client";
 
-type Tab = "kits" | "create" | "import";
-type Favorite = { marketSlug: string; displayName?: string; publisher?: string; marketBaseUrl?: string };
+type Tab = "kits" | "create" | "build" | "import" | "settings";
+type Favorite = { marketSlug: string; displayName?: string; publisher?: string; marketBaseUrl?: string; version?: string };
 type SessionUser = { id: string; email?: string } | null;
+
+// --- shared types for AI provider settings ---------------------------------
+type PublicProvider = {
+  id: string;
+  name: string;
+  providerType: string;
+  baseUrl?: string;
+  defaultModel?: string;
+  supportsStructuredJson?: boolean;
+  hasApiKey: boolean;
+};
+type CatalogEntry = {
+  providerType: string;
+  apiKeyRequired: boolean;
+  baseUrlRequired: boolean;
+  supportsCustomModels: boolean;
+  supportsStructuredJson: boolean;
+  defaultModel?: string;
+  models: { id: string; label: string; recommendedFor: string[] }[];
+};
 
 export default function ForgeApp({ user }: { user: SessionUser }) {
   const forge = useMemo(() => getForgeClient(), []);
@@ -76,8 +96,14 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
         <button className="akf-tab" role="tab" aria-selected={tab === "create"} onClick={() => setTab("create")}>
           Create
         </button>
+        <button className="akf-tab" role="tab" aria-selected={tab === "build"} onClick={() => setTab("build")}>
+          Build with AI
+        </button>
         <button className="akf-tab" role="tab" aria-selected={tab === "import"} onClick={() => setTab("import")}>
           Import
+        </button>
+        <button className="akf-tab" role="tab" aria-selected={tab === "settings"} onClick={() => setTab("settings")}>
+          Settings
         </button>
       </div>
 
@@ -125,7 +151,20 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
         />
       )}
 
+      {tab === "build" && (
+        <BuildWithAi
+          forge={forge}
+          notify={notify}
+          onRendered={(kitId) => {
+            void refresh();
+            setOpenKitId(kitId);
+          }}
+        />
+      )}
+
       {tab === "import" && <ImportPanel forge={forge} notify={notify} onDone={() => { void refresh(); setTab("kits"); }} />}
+
+      {tab === "settings" && <SettingsPanel forge={forge} notify={notify} />}
 
       {toast && <div className={`akf-toast${toast.err ? " err" : ""}`}>{toast.msg}</div>}
     </div>
@@ -150,9 +189,43 @@ function MyKits({
 }) {
   const forge = useMemo(() => getForgeClient(), []);
   const [preview, setPreview] = useState<{ files: string[]; texts: Record<string, string> } | null>(null);
+  const [submitKitId, setSubmitKitId] = useState<string | null>(null);
+  const [updates, setUpdates] = useState<Record<string, string>>({});
+
+  // Read-only update check for favorited Market kits.
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(
+      favorites.map(async (f) => {
+        try {
+          const status = await forge.checkKitUpdate({
+            slug: f.marketSlug,
+            marketBaseUrl: f.marketBaseUrl,
+            installedVersion: f.version ?? "1"
+          });
+          return [f.marketSlug, status.updateAvailable ? `Update available (v${status.latestVersion})` : ""] as const;
+        } catch {
+          return [f.marketSlug, ""] as const;
+        }
+      })
+    ).then((pairs) => {
+      if (!cancelled) setUpdates(Object.fromEntries(pairs.filter(([, v]) => v)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [favorites, forge]);
 
   return (
     <>
+      {submitKitId && (
+        <SubmitToMarket
+          forge={forge}
+          kitId={submitKitId}
+          notify={notify}
+          onClose={() => setSubmitKitId(null)}
+        />
+      )}
       <h2>Owned kits</h2>
       {kits.length === 0 ? (
         <div className="akf-empty">No kits yet. Create one or import a package.</div>
@@ -174,6 +247,9 @@ function MyKits({
                 >
                   Package
                 </button>
+                <button className="akf-btn" onClick={() => setSubmitKitId(k.kitId)}>
+                  Submit to Market
+                </button>
                 <button className="akf-btn danger" onClick={() => void onRemove(k.kitId)}>
                   Remove
                 </button>
@@ -192,6 +268,9 @@ function MyKits({
             <div className="akf-card" key={f.marketSlug}>
               <h3>{f.displayName ?? f.marketSlug}</h3>
               <div className="akf-meta">{f.publisher ?? "Market"} · {f.marketSlug}</div>
+              {updates[f.marketSlug] && (
+                <div className="akf-meta" style={{ color: "var(--akf-accent, #c47f00)" }}>↑ {updates[f.marketSlug]}</div>
+              )}
               <div className="akf-row">
                 <button
                   className="akf-btn"
@@ -550,6 +629,355 @@ function KitEditor({
           <pre>{JSON.stringify(report, null, 2)}</pre>
         </div>
       )}
+    </div>
+  );
+}
+
+// --- Submit to Market --------------------------------------------------------
+function SubmitToMarket({
+  forge,
+  kitId,
+  notify,
+  onClose
+}: {
+  forge: ReturnType<typeof getForgeClient>;
+  kitId: string;
+  notify: (m: string, e?: boolean) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [summary, setSummary] = useState("");
+  const [description, setDescription] = useState("");
+  const [categories, setCategories] = useState("");
+  const [tags, setTags] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ submissionId?: string; status?: string; marketLink?: string } | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      // The backend authoritatively resolves publisher/listing from the kit +
+      // the user's AgentKitProfile; these fields are an optional listing draft.
+      const listingDraft = {
+        ...(name.trim() ? { name: name.trim() } : {}),
+        ...(summary.trim() ? { summary: summary.trim() } : {}),
+        ...(description.trim() ? { description: description.trim() } : {}),
+        ...(categories.trim() ? { categories: categories.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
+        ...(tags.trim() ? { tags: tags.split(",").map((s) => s.trim()).filter(Boolean) } : {})
+      };
+      const res = (await forge.submitHostedMarketKit({
+        rootPath: kitId,
+        marketBaseUrl: "",
+        validationProfile: "publishable",
+        // listingDraft is passed through to /api/market/submit (widened type).
+        listingDraft
+      } as never)) as { submissionId?: string; status?: string; marketLink?: string };
+      setResult(res);
+      notify("Submitted to Market for review.");
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="akf-panel" style={{ marginBottom: "1rem", maxWidth: 640 }}>
+      <div className="akf-row" style={{ justifyContent: "space-between" }}>
+        <strong>Submit to AgentKitMarket</strong>
+        <button className="akf-btn" onClick={onClose}>Close</button>
+      </div>
+      <p className="akf-meta">
+        Validates (publishable) and packages your kit, then submits it to the review queue using your
+        signed-in AgentKitProject session. No automatic publishing — admin review is required.
+      </p>
+      <div className="akf-field"><label>Listing name (optional)</label>
+        <input className="akf-input" value={name} onChange={(e) => setName(e.target.value)} /></div>
+      <div className="akf-field"><label>Summary (optional)</label>
+        <input className="akf-input" value={summary} onChange={(e) => setSummary(e.target.value)} /></div>
+      <div className="akf-field"><label>Description (optional)</label>
+        <textarea className="akf-textarea" value={description} onChange={(e) => setDescription(e.target.value)} /></div>
+      <div className="akf-field"><label>Categories (comma-separated)</label>
+        <input className="akf-input" value={categories} onChange={(e) => setCategories(e.target.value)} /></div>
+      <div className="akf-field"><label>Tags (comma-separated)</label>
+        <input className="akf-input" value={tags} onChange={(e) => setTags(e.target.value)} /></div>
+      <button className="akf-btn primary" disabled={busy} onClick={() => void submit()}>
+        {busy ? "Submitting…" : "Submit for review"}
+      </button>
+      {result && (
+        <div className="akf-meta" style={{ marginTop: "0.75rem" }}>
+          Status: <strong>{result.status}</strong> · Submission {result.submissionId}
+          {result.marketLink && (
+            <> · <a href={result.marketLink} target="_blank" rel="noreferrer">view</a></>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Build with AI -----------------------------------------------------------
+function BuildWithAi({
+  forge,
+  notify,
+  onRendered
+}: {
+  forge: ReturnType<typeof getForgeClient>;
+  notify: (m: string, e?: boolean) => void;
+  onRendered: (kitId: string) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [session, setSession] = useState<unknown>(null);
+  const [draftJson, setDraftJson] = useState<unknown>(null);
+  const [changeRequest, setChangeRequest] = useState("");
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      const res = await forge.generateAgentKitDraftWithAi({ userRequest: prompt } as never);
+      const r = res as { draftJson?: unknown; session?: unknown };
+      setDraftJson(r.draftJson ?? null);
+      setSession(r.session ?? null);
+      notify("Draft generated. Review or revise, then render into a kit.");
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revise = async () => {
+    setBusy(true);
+    try {
+      const res = await forge.reviseAgentKitDraftWithAi({ session, changeRequest } as never);
+      const r = res as { draftJson?: unknown; session?: unknown };
+      setDraftJson(r.draftJson ?? null);
+      setSession(r.session ?? null);
+      setChangeRequest("");
+      notify("Draft revised.");
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const render = async () => {
+    setBusy(true);
+    try {
+      const res = await forge.renderGeneratedAgentKitDraft({ draftJson, outputFolder: "", force: true });
+      notify("Kit created from draft.");
+      if (res.kitId) onRendered(res.kitId);
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="akf-panel" style={{ maxWidth: 720 }}>
+      <h2>Build a kit with AI</h2>
+      <p className="akf-meta">
+        Uses your default AI provider (configure it under Settings). Generate a draft, optionally revise it,
+        then render it into a new kit in your library.
+      </p>
+      <div className="akf-field">
+        <label>Describe the kit you want</label>
+        <textarea
+          className="akf-textarea"
+          value={prompt}
+          onChange={(e) => setPrompt(e.target.value)}
+          placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies."
+        />
+      </div>
+      <button className="akf-btn primary" disabled={!prompt.trim() || busy} onClick={() => void generate()}>
+        {busy ? "Working…" : "Generate draft"}
+      </button>
+
+      {draftJson != null && (
+        <>
+          <h3 style={{ marginTop: "1rem" }}>Draft preview</h3>
+          <pre className="akf-code" style={{ whiteSpace: "pre-wrap", maxHeight: 320, overflow: "auto" }}>
+            {JSON.stringify(draftJson, null, 2)}
+          </pre>
+          <div className="akf-field">
+            <label>Revision request (optional)</label>
+            <input className="akf-input" value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} />
+          </div>
+          <div className="akf-row">
+            <button className="akf-btn" disabled={!changeRequest.trim() || busy} onClick={() => void revise()}>
+              Revise
+            </button>
+            <button className="akf-btn primary" disabled={busy} onClick={() => void render()}>
+              Render into a kit
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- Settings (AI providers) -------------------------------------------------
+function SettingsPanel({
+  forge,
+  notify
+}: {
+  forge: ReturnType<typeof getForgeClient>;
+  notify: (m: string, e?: boolean) => void;
+}) {
+  const [providers, setProviders] = useState<PublicProvider[]>([]);
+  const [defaultId, setDefaultId] = useState<string | undefined>(undefined);
+  const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  // Add-provider form state.
+  const [providerType, setProviderType] = useState("openai");
+  const [name, setName] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [defaultModel, setDefaultModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+
+  const load = useCallback(async () => {
+    const res = await fetch("/api/settings/ai-providers", { credentials: "include" }).then((r) => r.json());
+    setProviders((res.providers ?? []) as PublicProvider[]);
+    setDefaultId(res.defaultProviderId);
+    setCatalog((res.catalog ?? []) as CatalogEntry[]);
+  }, []);
+
+  useEffect(() => {
+    void load().catch((e) => notify(errMsg(e), true));
+  }, [load, notify]);
+
+  const cat = catalog.find((c) => c.providerType === providerType);
+
+  const add = async () => {
+    setBusy(true);
+    try {
+      await forge.saveAiProvider({
+        name: name.trim() || providerType,
+        providerType,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        defaultModel: defaultModel.trim() || cat?.defaultModel || "",
+        supportsStructuredJson: cat?.supportsStructuredJson ?? false
+      } as never);
+      notify("Provider saved.");
+      setApiKey("");
+      setName("");
+      await load();
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    try {
+      await forge.removeAiProvider(id);
+      notify("Provider removed.");
+      await load();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  const makeDefault = async (id: string) => {
+    try {
+      await forge.setDefaultAiProvider(id);
+      notify("Default provider set.");
+      await load();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  const test = async (id: string) => {
+    try {
+      const res = await forge.testAiProviderConnection({ providerId: id, model: "" });
+      notify(res.ok ? `OK: ${res.message}` : `Failed: ${res.message}`, !res.ok);
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  return (
+    <div style={{ maxWidth: 720 }}>
+      <h2>AI providers</h2>
+      <p className="akf-meta">
+        Configure per-user AI providers (used by Build with AI). API keys are stored server-side and never
+        sent back to the browser.
+      </p>
+      {providers.length === 0 ? (
+        <div className="akf-empty">No providers configured yet.</div>
+      ) : (
+        <div className="akf-grid">
+          {providers.map((p) => (
+            <div className="akf-card" key={p.id}>
+              <h3>
+                {p.name} {p.id === defaultId && <span className="akf-badge ok">default</span>}
+              </h3>
+              <div className="akf-meta">
+                {p.providerType} · {p.defaultModel || "no model"} · {p.hasApiKey ? "key set" : "no key"}
+              </div>
+              <div className="akf-row">
+                {p.id !== defaultId && (
+                  <button className="akf-btn" onClick={() => void makeDefault(p.id)}>Make default</button>
+                )}
+                <button className="akf-btn" onClick={() => void test(p.id)}>Test</button>
+                <button className="akf-btn danger" onClick={() => void remove(p.id)}>Remove</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="akf-panel" style={{ marginTop: "1rem", maxWidth: 560 }}>
+        <h3>Add / update a provider</h3>
+        <div className="akf-field">
+          <label>Provider type</label>
+          <select className="akf-select" value={providerType} onChange={(e) => setProviderType(e.target.value)}>
+            {catalog.map((c) => (
+              <option key={c.providerType} value={c.providerType}>{c.providerType}</option>
+            ))}
+          </select>
+        </div>
+        <div className="akf-field">
+          <label>Display name</label>
+          <input className="akf-input" value={name} onChange={(e) => setName(e.target.value)} placeholder={providerType} />
+        </div>
+        <div className="akf-field">
+          <label>Default model</label>
+          {cat && cat.models.length > 0 ? (
+            <select className="akf-select" value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}>
+              <option value="">{cat.defaultModel ? `default (${cat.defaultModel})` : "select…"}</option>
+              {cat.models.map((m) => (
+                <option key={m.id} value={m.id}>{m.label}</option>
+              ))}
+            </select>
+          ) : (
+            <input className="akf-input" value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} />
+          )}
+        </div>
+        {cat?.baseUrlRequired && (
+          <div className="akf-field">
+            <label>Base URL</label>
+            <input className="akf-input" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://…" />
+          </div>
+        )}
+        {(cat?.apiKeyRequired ?? true) && (
+          <div className="akf-field">
+            <label>API key {`(stored server-side, not echoed back)`}</label>
+            <input className="akf-input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+          </div>
+        )}
+        <button className="akf-btn primary" disabled={busy} onClick={() => void add()}>
+          {busy ? "Saving…" : "Save provider"}
+        </button>
+      </div>
     </div>
   );
 }

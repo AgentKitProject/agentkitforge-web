@@ -465,9 +465,14 @@ export class WebForgeClient implements ForgeClient {
   // market submit
   // ===========================================================================
   submitHostedMarketKit(input: SubmitHostedMarketKitInput): Promise<SubmitHostedMarketKitResult> {
+    const listingDraft = (input as { listingDraft?: unknown }).listingDraft;
     return this.json<SubmitHostedMarketKitResult>("/api/market/submit", {
       method: "POST",
-      body: JSON.stringify({ kitId: input.rootPath, marketBaseUrl: input.marketBaseUrl, profile: input.validationProfile })
+      body: JSON.stringify({
+        kitId: input.rootPath,
+        marketBaseUrl: input.marketBaseUrl || undefined,
+        listingDraft
+      })
     });
   }
 

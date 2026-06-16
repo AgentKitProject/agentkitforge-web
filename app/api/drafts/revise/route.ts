@@ -6,9 +6,9 @@ import { reviseDraft, type ReviseDraftInput } from "@/server/core/ai-draft";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  return withUser(async () => {
+  return withUser(async (user) => {
     const body = (await request.json()) as ReviseDraftInput;
     if (!body.session || !body.changeRequest) throw new Error("session and changeRequest are required.");
-    return reviseDraft(body);
+    return reviseDraft(user.id, body);
   });
 }

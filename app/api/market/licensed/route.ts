@@ -6,11 +6,12 @@
 // KitStore — bytes stay in this process and are discarded. (Mirrors the desktop
 // market-operation.mjs licensed-package path.)
 //
-// TODO(market-auth): seed a real capture TokenStore from the user's WorkOS
-// session so entitlement checks pass; the tokenless store below only works for
-// previewing public metadata where entitlement is not enforced.
+// AUTH: seeds a TokenStore from the user's WorkOS access token (AuthKit cookie
+// session, forwarded as the Bearer token) so entitlement checks pass for
+// licensed/private kits; degrades to tokenless for public metadata previews.
 import { withUser } from "@/lib/api";
 import { loadCoreMarket } from "@/server/core/load-core";
+import { createForwardingStore } from "@/server/core/import-ops";
 
 export const dynamic = "force-dynamic";
 
@@ -41,17 +42,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as { slug?: string; kitId?: string; marketBaseUrl?: string };
     if (!body.slug) throw new Error("slug is required.");
     const market = await loadCoreMarket();
-    const store = {
-      async get() {
-        return null;
-      },
-      async set() {
-        /* no-op */
-      },
-      async clear() {
-        /* no-op */
-      }
-    };
+    const store = await createForwardingStore();
     const licensed = await market.fetchLicensedKit(store as never, {
       slug: body.slug,
       marketBaseUrl: body.marketBaseUrl ?? process.env.AGENTKITMARKET_BASE_URL,

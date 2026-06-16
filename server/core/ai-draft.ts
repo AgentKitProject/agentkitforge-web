@@ -1,12 +1,16 @@
 // AI draft generation/revision — ported from the desktop
-// generate-agent-kit-draft.mjs bridge. Provider config is read from SERVER env
-// (AGENTKITFORGE_AI_PROVIDER_CONFIG), never supplied by the client, so API keys
-// never reach the browser.
+// generate-agent-kit-draft.mjs bridge.
+//
+// Provider config is resolved from the CURRENT USER's server-side settings
+// (see server/store/user-settings.ts), so each user supplies their own provider
+// + API key and keys never reach the browser. (A single-provider env fallback,
+// AGENTKITFORGE_AI_PROVIDER_CONFIG, is kept for headless/dev use.)
 //
 // Supports the same provider types as the desktop app: openai, anthropic,
 // gemini, ollama, openai-compatible. (Verified against the published Anthropic
 // Messages API shape used by the desktop bridge.)
 import { loadCore } from "@/server/core/load-core";
+import { getUserSettingsStore } from "@/server/store/user-settings";
 
 type ProviderConfig = {
   id?: string;
@@ -26,12 +30,7 @@ function toList(value: string | string[] | undefined): string[] | undefined {
   return trimmed ? [trimmed] : undefined;
 }
 
-function loadProviderConfig(): ProviderConfig {
-  const raw = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
-  if (!raw) {
-    throw new Error("AI provider configuration is required (set AGENTKITFORGE_AI_PROVIDER_CONFIG).");
-  }
-  const parsed = JSON.parse(raw) as ProviderConfig;
+function normalizeProviderConfig(parsed: ProviderConfig): ProviderConfig {
   return {
     ...parsed,
     name: parsed.name?.trim() || parsed.providerType,
@@ -39,6 +38,25 @@ function loadProviderConfig(): ProviderConfig {
     apiKey: parsed.apiKey?.trim() || undefined,
     defaultModel: parsed.defaultModel?.trim() || ""
   };
+}
+
+// Resolve the provider config for a user: prefer their stored provider (default
+// or the requested id, key decrypted), else fall back to the server env config.
+async function resolveProviderConfig(userId: string, providerId?: string): Promise<ProviderConfig> {
+  const stored = await getUserSettingsStore().resolveProvider(userId, providerId);
+  if (stored) {
+    return normalizeProviderConfig({
+      id: stored.id,
+      name: stored.name,
+      providerType: stored.providerType,
+      baseUrl: stored.baseUrl,
+      apiKey: stored.apiKey,
+      defaultModel: stored.defaultModel
+    });
+  }
+  const raw = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
+  if (raw) return normalizeProviderConfig(JSON.parse(raw) as ProviderConfig);
+  throw new Error("No AI provider configured. Add a provider in Settings before generating a draft.");
 }
 
 function resolveModel(provider: ProviderConfig, inputModel?: string): string {
@@ -234,10 +252,12 @@ export type GenerateDraftInput = {
   excludedSections?: string[];
   exampleInputDocuments?: unknown[];
   model?: string;
+  /** Optional explicit provider id; otherwise the user's default is used. */
+  providerId?: string;
 };
 
-export async function generateDraft(input: GenerateDraftInput) {
-  const provider = loadProviderConfig();
+export async function generateDraft(userId: string, input: GenerateDraftInput) {
+  const provider = await resolveProviderConfig(userId, input.providerId);
   const core = await loadCore();
   const model = resolveModel(provider, input.model);
   if (!model) throw new Error(`${provider.name} model is required.`);
@@ -282,10 +302,11 @@ export type ReviseDraftInput = {
   excludedSections?: string[];
   exampleInputDocuments?: unknown[];
   model?: string;
+  providerId?: string;
 };
 
-export async function reviseDraft(input: ReviseDraftInput) {
-  const provider = loadProviderConfig();
+export async function reviseDraft(userId: string, input: ReviseDraftInput) {
+  const provider = await resolveProviderConfig(userId, input.providerId);
   const core = await loadCore();
   const model = resolveModel(provider, input.model);
   if (!model) throw new Error(`${provider.name} model is required.`);
@@ -319,4 +340,28 @@ export async function reviseDraft(input: ReviseDraftInput) {
     session: updatedSession,
     currentRevision: core.getCurrentDraftRevision(updatedSession)
   };
+}
+
+// Lightweight connectivity/credentials check for a configured provider. Sends a
+// trivial prompt and reports success/failure without parsing a draft.
+export async function testProvider(
+  userId: string,
+  input: { providerId?: string; model?: string }
+): Promise<{ ok: boolean; model: string; message: string }> {
+  const provider = await resolveProviderConfig(userId, input.providerId);
+  const model = resolveModel(provider, input.model);
+  if (!model) return { ok: false, model: "", message: `${provider.name} model is required.` };
+  const draftRequest: DraftRequestLike = {
+    systemInstructions: "You are a connectivity probe. Reply with the single word OK.",
+    builderInstructions: "Connectivity check.",
+    userPrompt: "Reply with OK.",
+    expectedJsonSchema: {},
+    responseFormatName: "probe"
+  };
+  try {
+    const text = await callProvider(provider, model, draftRequest);
+    return { ok: true, model, message: `${provider.name} responded (${text.slice(0, 40)}).` };
+  } catch (error) {
+    return { ok: false, model, message: error instanceof Error ? error.message : String(error) };
+  }
 }
