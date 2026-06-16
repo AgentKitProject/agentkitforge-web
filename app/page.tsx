@@ -7,7 +7,8 @@ export default function HomePage() {
   return (
     <main style={{ fontFamily: "system-ui", padding: "2rem" }}>
       <h1>AgentKitForge Web</h1>
-      <p>Phase 1 backend. The HTTP API lives under <code>/api/*</code>. See <code>/health</code>.</p>
+      <p>The HTTP API lives under <code>/api/*</code>. See <code>/health</code>.</p>
+      <p>Open the Phase 2 web UI: <a href="/forge">/forge</a></p>
     </main>
   );
 }

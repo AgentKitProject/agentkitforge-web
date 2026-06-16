@@ -67,7 +67,7 @@ npm run dev                  # http://localhost:3000  (/health is public)
 ```bash
 npm run typecheck
 npm run build      # normal build (do NOT set BUILD_STANDALONE)
-npm test           # vitest: KitStore adapter + core-runner round-trip
+npm test           # vitest: KitStore adapter + core-runner round-trip + WebForgeClient mapping
 ```
 
 ## Self-host (Docker)
@@ -79,6 +79,59 @@ docker run -p 3000:3000 --env-file .env.local -v akf-data:/data agentkitforge-we
 
 The image needs `git` (for `/api/import/git`) — already installed. Mount a
 volume at `/data` so kit trees persist.
+
+## Phase 2 — Web UI + WebForgeClient
+
+Phase 2 adds the browser frontend at **`/forge`** (AuthKit-gated), built over the
+same `ForgeClient` seam the desktop app uses.
+
+### `WebForgeClient` (`forge-client/`)
+
+`forge-client/web-client.ts` implements the **same `ForgeClient` interface** as the
+desktop `TauriForgeClient`. The interface is **replicated** in
+`forge-client/types.ts` (not imported from the desktop repo): the desktop type
+module statically imports `@tauri-apps/plugin-updater` and pulls result types from
+the 11977-line `App.tsx`, neither installable here. **Keep method signatures in sync
+by hand.** Result payloads are widened to structural shapes (the UI reads a subset).
+
+The backend is **kitId + file-tree** based, so every path-shaped argument
+(`path`/`rootPath`/`kitPath`) is treated as a **kit id**. Desktop-only seams map to
+web behavior:
+
+| Seam | Web behavior |
+|---|---|
+| `select*` (open pickers) | hidden `<input type=file>` (or no-op for folders) |
+| `save*` / `package`/`export` | trigger a **browser download** of returned bytes/text |
+| `importAgentKitPackage` | multipart upload of the chosen `File` → `/api/import/zip` |
+| `openFolder` | no-op | `openExternalUrl` | `window.open` |
+| `getInitialDeepLinks`/`onDeepLink` | URL query params (`?import=…`) + `popstate` |
+| `checkForUpdate`/`relaunchApp` | `null` / `location.reload()` (web self-updates) |
+| auth `begin/complete/restore/disconnect` | the **AuthKit cookie session** (not device-auth); `/api/account` reports state |
+
+Methods with no web equivalent (`addKitToLibrary`, `inspect*Candidate/Package`,
+`renderAgentKitDraft`, `summarizeExampleInputDocuments`, `runAgentKitWithAi`) throw a
+clear `NotAvailableOnWebError`.
+
+### UI (`app/forge/`)
+
+**Approach: Option 2 (focused web UI), not importing the desktop `App.tsx`.** The
+desktop UI is path-based with deep `@tauri-apps`/Vite coupling; threading
+kitId-as-path through ~12k lines safely in one pass was not feasible. Instead the
+web UI (`app/forge/ForgeApp.tsx`) is a focused client component over the **same
+WebForgeClient seam**, covering the primary flows:
+
+- **My Kits**: owned kits + favorites (Market references).
+- **Create** from template (`blank` / `financial-review`).
+- **Edit** kit files (tree view + save).
+- **Validate** (profile selector), **Package**, **Export** (one-file / Claude Code /
+  Codex) — all download in the browser.
+- **Import**: upload `.agentkit.zip`, from Git, from Market, favorite a Market kit.
+- **Licensed-kit in-memory preview** (online-only, never persisted).
+
+**Deferred:** AI draft generate/revise UI, settings/AI-provider management, Market
+**submit** UI, update-check UI (the corresponding `/api/settings*`,
+`/api/market/submit`, `/api/kits/update-check` routes are not part of Phase 1 — the
+client methods degrade or throw until those land).
 
 ### Helm / ArgoCD (not built here)
 

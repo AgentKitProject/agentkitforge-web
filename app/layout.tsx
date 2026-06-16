@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import "./forge.css";
 
 export const metadata = {
   title: "AgentKitForge Web",
