@@ -88,28 +88,19 @@ function decryptSecret(stored: string): string {
 }
 
 // --- shapes ------------------------------------------------------------------
-
-export type StoredProvider = {
-  id: string;
-  name: string;
-  providerType: "openai" | "anthropic" | "gemini" | "ollama" | "openai-compatible";
-  baseUrl?: string;
-  defaultModel?: string;
-  supportsStructuredJson?: boolean;
-  /** Encrypted-or-plaintext API key. NEVER returned to the client. */
-  apiKey?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type UserSettings = {
-  providers: StoredProvider[];
-  defaultProviderId?: string;
-  preferences?: Record<string, unknown>;
-};
-
-/** Public provider view — secrets stripped, replaced by `hasApiKey`. */
-export type PublicProvider = Omit<StoredProvider, "apiKey"> & { hasApiKey: boolean };
+// Canonical shapes live in settings-types.ts so every adapter shares them; the
+// disk adapter re-exports them for backward-compatible imports from this module.
+export type {
+  StoredProvider,
+  UserSettings,
+  PublicProvider
+} from "@/server/store/settings-types";
+import type {
+  PublicProvider,
+  StoredProvider,
+  UserSettings,
+  UserSettingsStore as UserSettingsStoreInterface
+} from "@/server/store/settings-types";
 
 const EMPTY: UserSettings = { providers: [] };
 
@@ -134,7 +125,7 @@ export function toPublicProvider(p: StoredProvider): PublicProvider {
   return { ...rest, hasApiKey: Boolean(apiKey) };
 }
 
-export class UserSettingsStore {
+export class DiskUserSettingsStore implements UserSettingsStoreInterface {
   async getPublic(userId: string): Promise<{ providers: PublicProvider[]; defaultProviderId?: string; preferences?: Record<string, unknown> }> {
     const s = await readSettings(userId);
     return { providers: s.providers.map(toPublicProvider), defaultProviderId: s.defaultProviderId, preferences: s.preferences };
@@ -214,9 +205,10 @@ export class UserSettingsStore {
   }
 }
 
-let singleton: UserSettingsStore | null = null;
+/** @deprecated Back-compat alias for the disk adapter class. */
+export const UserSettingsStore = DiskUserSettingsStore;
 
-export function getUserSettingsStore(): UserSettingsStore {
-  if (!singleton) singleton = new UserSettingsStore();
-  return singleton;
-}
+// Adapter selection (local | aws | selfhost) lives in server/store/index.ts.
+// Re-exported here so existing callers keep importing getUserSettingsStore from
+// this module; it is now ASYNC because cloud adapters build clients lazily.
+export { getUserSettingsStore } from "@/server/store/index";

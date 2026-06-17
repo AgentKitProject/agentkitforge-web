@@ -91,7 +91,7 @@ export async function withMaterializedKit<T>(
   fn: (ctx: RunnerContext) => Promise<T>,
   options: { persist?: boolean } = {}
 ): Promise<T> {
-  const store = getKitStore();
+  const store = await getKitStore();
   const tree = await store.getKitTree(userId, kitId);
   const core = await loadCore();
   const tmpDir = await makeTempDir();

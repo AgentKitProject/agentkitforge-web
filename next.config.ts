@@ -11,7 +11,17 @@ const nextConfig: NextConfig = {
   // @agentkitforge/core is Node-only (fs, child_process). Keep it external to
   // the server bundle so its native/Node deps resolve at runtime, and ensure it
   // is NEVER pulled into a client bundle.
-  serverExternalPackages: ["@agentkitforge/core", "jszip"]
+  // AWS SDK + pg are Node-only cloud-adapter deps, loaded only when
+  // KITSTORE_BACKEND=aws|selfhost. Keep them external so they resolve at runtime
+  // in the server (and standalone) output and are never bundled client-side.
+  serverExternalPackages: [
+    "@agentkitforge/core",
+    "jszip",
+    "@aws-sdk/client-s3",
+    "@aws-sdk/client-dynamodb",
+    "@aws-sdk/lib-dynamodb",
+    "pg"
+  ]
 };
 
 export default nextConfig;

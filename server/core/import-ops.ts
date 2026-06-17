@@ -36,7 +36,7 @@ export async function importFromGit(
     // Drop the .git dir so it is not persisted into the kit tree.
     await fs.rm(path.join(dest, ".git"), { recursive: true, force: true });
     const tree = await readTreeFromDir(dest);
-    const meta = await getKitStore().createKit(userId, { kind: "tree", tree, source: "git" });
+    const meta = await (await getKitStore()).createKit(userId, { kind: "tree", tree, source: "git" });
     return { kitId: meta.kitId };
   } finally {
     await fs.rm(tmp, { recursive: true, force: true });
@@ -60,7 +60,7 @@ export async function importFromMarket(
     clientId: params.clientId ?? ""
   });
   const tree = await unzipToTree(Buffer.from(bytes));
-  const meta = await getKitStore().createKit(userId, { kind: "tree", tree, source: "market-import" });
+  const meta = await (await getKitStore()).createKit(userId, { kind: "tree", tree, source: "market-import" });
   return { kitId: meta.kitId, provenance };
 }
 

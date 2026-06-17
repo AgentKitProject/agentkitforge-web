@@ -12,7 +12,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ kitI
     if (!body.path || body.content === undefined) {
       throw new Error("path and content are required.");
     }
-    await getKitStore().writeKitFile(user.id, kitId, {
+    await (await getKitStore()).writeKitFile(user.id, kitId, {
       path: body.path,
       content: body.content,
       encoding: body.encoding ?? "utf8"
@@ -26,7 +26,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ k
   return withUser(async (user) => {
     const body = (await request.json()) as { path?: string };
     if (!body.path) throw new Error("path is required.");
-    await getKitStore().deleteKitFile(user.id, kitId, body.path);
+    await (await getKitStore()).deleteKitFile(user.id, kitId, body.path);
     return { ok: true };
   });
 }

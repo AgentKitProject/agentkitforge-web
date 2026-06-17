@@ -267,12 +267,7 @@ export class LocalDiskKitStore implements KitStore {
   }
 }
 
-let singleton: KitStore | null = null;
-
-export function getKitStore(): KitStore {
-  // TODO: select adapter from env (e.g. AGENTKITFORGE_WEB_STORE=local|s3|postgres).
-  if (!singleton) {
-    singleton = new LocalDiskKitStore();
-  }
-  return singleton;
-}
+// Adapter selection (local | aws | selfhost) lives in server/store/index.ts.
+// Re-exported here so existing callers can keep importing getKitStore from this
+// module; it is now ASYNC because cloud adapters build their clients lazily.
+export { getKitStore } from "@/server/store/index";

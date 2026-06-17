@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   return withUser(async (user) => {
-    const kits = await getKitStore().listUserKits(user.id);
+    const kits = await (await getKitStore()).listUserKits(user.id);
     return { kits };
   });
 }

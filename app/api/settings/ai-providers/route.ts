@@ -16,7 +16,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   return withUser(async (user) => {
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     const settings = await store.getPublic(user.id);
     return { providers: settings.providers, defaultProviderId: settings.defaultProviderId, catalog: await getProviderCatalog() };
   });
@@ -41,7 +41,7 @@ type PutBody =
 export async function PUT(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json()) as PutBody;
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     if (body.action === "save") {
       if (!body.provider?.providerType) throw new Error("provider.providerType is required.");
       await store.saveProvider(user.id, {

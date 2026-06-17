@@ -16,7 +16,7 @@ export async function POST(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json()) as { apiKey?: string };
     if (!body.apiKey?.trim()) throw new Error("apiKey is required.");
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     await store.saveProvider(user.id, {
       id: OPENAI_ID,
       name: "OpenAI",
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
 
 export async function DELETE() {
   return withUser(async (user) => {
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     await store.removeProvider(user.id, OPENAI_ID);
     return store.getPublic(user.id);
   });

@@ -22,7 +22,7 @@ afterAll(async () => {
 
 describe("core runner round-trip", () => {
   it("creates a template kit, validates it, and packages zip bytes", async () => {
-    const store = getKitStore();
+    const store = await getKitStore();
     const meta = await store.createKit(USER, {
       kind: "template",
       template: "blank",

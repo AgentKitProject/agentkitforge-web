@@ -22,7 +22,7 @@ export async function POST(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json()) as SaveBody;
     if (!body.providerType) throw new Error("providerType is required.");
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     await store.saveProvider(user.id, {
       id: body.id,
       name: body.name ?? body.providerType,
@@ -40,7 +40,7 @@ export async function DELETE(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json().catch(() => ({}))) as { providerId?: string };
     if (!body.providerId) throw new Error("providerId is required.");
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     await store.removeProvider(user.id, body.providerId);
     return store.getPublic(user.id);
   });

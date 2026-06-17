@@ -16,7 +16,7 @@ export async function POST(request: Request) {
     if (!body.template || !body.id || !body.name || !body.description) {
       throw new Error("template, id, name and description are required.");
     }
-    const meta = await getKitStore().createKit(user.id, {
+    const meta = await (await getKitStore()).createKit(user.id, {
       kind: "template",
       template: body.template,
       id: body.id,

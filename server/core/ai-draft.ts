@@ -43,7 +43,7 @@ function normalizeProviderConfig(parsed: ProviderConfig): ProviderConfig {
 // Resolve the provider config for a user: prefer their stored provider (default
 // or the requested id, key decrypted), else fall back to the server env config.
 async function resolveProviderConfig(userId: string, providerId?: string): Promise<ProviderConfig> {
-  const stored = await getUserSettingsStore().resolveProvider(userId, providerId);
+  const stored = await (await getUserSettingsStore()).resolveProvider(userId, providerId);
   if (stored) {
     return normalizeProviderConfig({
       id: stored.id,

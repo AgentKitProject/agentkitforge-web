@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 export async function GET(_request: Request, { params }: { params: Promise<{ kitId: string }> }) {
   const { kitId } = await params;
   return withUser(async (user) => {
-    const tree = await getKitStore().getKitTree(user.id, kitId);
+    const tree = await (await getKitStore()).getKitTree(user.id, kitId);
     return { tree };
   });
 }

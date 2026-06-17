@@ -114,14 +114,14 @@ export async function createKitFromDraft(userId: string, draftJson: unknown) {
     const renderedRoot = (result as { rootPath?: string }).rootPath ?? outFolder;
     return readTreeFromDir(renderedRoot);
   });
-  const store = getKitStore();
+  const store = await getKitStore();
   return store.createKit(userId, { kind: "tree", tree, source: "draft" });
 }
 
 // --- import: upload .agentkit.zip -> new kit ---------------------------------
 export async function importPackageZip(userId: string, zipBytes: Buffer): Promise<{ kitId: string }> {
   const tree = await unzipToTree(zipBytes);
-  const store = getKitStore();
+  const store = await getKitStore();
   const meta = await store.createKit(userId, { kind: "tree", tree, source: "upload-zip" });
   return { kitId: meta.kitId };
 }

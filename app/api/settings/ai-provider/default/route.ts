@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json()) as { providerId?: string };
     if (!body.providerId) throw new Error("providerId is required.");
-    const store = getUserSettingsStore();
+    const store = await getUserSettingsStore();
     await store.setDefault(user.id, body.providerId);
     return store.getPublic(user.id);
   });
