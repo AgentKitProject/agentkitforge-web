@@ -84,6 +84,10 @@ export interface KitStore {
   deleteKitFile(userId: string, kitId: string, path: string): Promise<void>;
   deleteKit(userId: string, kitId: string): Promise<void>;
 
+  // --- quota ---------------------------------------------------------------
+  /** Return the current kit-count and total-bytes for the account. */
+  getUsage(userId: string): Promise<{ kitCount: number; bytes: number }>;
+
   // --- favorites (references to Market kits, NOT copies) -------------------
   addFavorite(userId: string, favorite: FavoriteRecord): Promise<FavoriteRecord>;
   listFavorites(userId: string): Promise<FavoriteRecord[]>;

@@ -5,10 +5,11 @@
 // adapter don't need `pg` at type-check time and pg-mem satisfies it directly,
 // plus an idempotent CREATE TABLE IF NOT EXISTS schema run once on startup.
 //
-// Two tables:
+// Three tables:
 //   kit_metadata   (user_id, kit_id) PK — owned-kit metadata rows
 //   user_settings  (user_id) PK         — per-user settings jsonb (keys
 //                                          AES-256-GCM encrypted before write)
+//   kit_usage      (user_id) PK         — per-account kit-count + byte counters
 // Kit FILE TREES live in MinIO/S3 (see s3-tree.ts), NOT in Postgres.
 
 export interface PgQueryable {
@@ -34,6 +35,12 @@ CREATE INDEX IF NOT EXISTS kit_metadata_user_updated_idx
 CREATE TABLE IF NOT EXISTS user_settings (
   user_id   text PRIMARY KEY,
   settings  jsonb NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kit_usage (
+  user_id    text PRIMARY KEY,
+  kit_count  bigint NOT NULL DEFAULT 0,
+  bytes      bigint NOT NULL DEFAULT 0
 );
 `;
 

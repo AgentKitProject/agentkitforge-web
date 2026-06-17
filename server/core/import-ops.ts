@@ -7,9 +7,12 @@ import { promisify } from "node:util";
 import { loadCoreMarket } from "@/server/core/load-core";
 import { readTreeFromDir } from "@/server/core/runner";
 import { getKitStore } from "@/server/store/local-disk";
-import { unzipToTree } from "@/server/core/operations";
+import { assertKitValid, unzipToTree, KitValidationError } from "@/server/core/operations";
 import { getWorkosAccessToken } from "@/server/core/market-auth";
 import type { TokenStore } from "@agentkitforge/core/market";
+
+// Re-export so route error handlers can detect this type.
+export { KitValidationError };
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +39,8 @@ export async function importFromGit(
     // Drop the .git dir so it is not persisted into the kit tree.
     await fs.rm(path.join(dest, ".git"), { recursive: true, force: true });
     const tree = await readTreeFromDir(dest);
+    // Gate: reject non-kit repositories.
+    await assertKitValid(tree);
     const meta = await (await getKitStore()).createKit(userId, { kind: "tree", tree, source: "git" });
     return { kitId: meta.kitId };
   } finally {
@@ -60,6 +65,9 @@ export async function importFromMarket(
     clientId: params.clientId ?? ""
   });
   const tree = await unzipToTree(Buffer.from(bytes));
+  // Gate: validate before persisting. Market kits should always be valid; this
+  // also protects against malicious/misconfigured Market instances.
+  await assertKitValid(tree);
   const meta = await (await getKitStore()).createKit(userId, { kind: "tree", tree, source: "market-import" });
   return { kitId: meta.kitId, provenance };
 }

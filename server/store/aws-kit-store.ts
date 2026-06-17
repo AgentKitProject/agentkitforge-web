@@ -28,6 +28,7 @@ import { S3Client } from "@aws-sdk/client-s3";
 import { S3TreeStore } from "@/server/store/s3-tree";
 import { materializeTemplateTree } from "@/server/store/template-tree";
 import { assertSafeSegment, normalizeRelPath, parseKitName } from "@/server/store/shared";
+import { getQuotaLimits, kitFileBytes, QuotaExceededError } from "@/server/store/quota";
 import {
   type CreateKitInput,
   type FavoriteRecord,
@@ -55,6 +56,10 @@ export type AwsKitStoreConfig = {
   /** forcePathStyle for S3-compatible endpoints in tests. */
   s3ForcePathStyle?: boolean;
 };
+
+// Sentinel kitId stored in DynamoDB for usage accounting. Real kit IDs are
+// UUIDs with hyphens; this value cannot collide with them.
+const USAGE_ITEM_KIT_ID = "#USAGE";
 
 export class AwsKitStore implements KitStore {
   private readonly ddb: DynamoDBDocumentClient;
@@ -86,6 +91,39 @@ export class AwsKitStore implements KitStore {
     this.trees = new S3TreeStore(s3, { bucket: config.s3Bucket, prefix: config.s3Prefix });
   }
 
+  // --- quota ---------------------------------------------------------------
+
+  async getUsage(userId: string): Promise<{ kitCount: number; bytes: number }> {
+    assertSafeSegment(userId, "userId");
+    const res = await this.ddb.send(
+      new GetCommand({ TableName: this.table, Key: { userId, kitId: USAGE_ITEM_KIT_ID } })
+    );
+    if (!res.Item) return { kitCount: 0, bytes: 0 };
+    return {
+      kitCount: (res.Item.kitCount as number | undefined) ?? 0,
+      bytes: (res.Item.bytes as number | undefined) ?? 0
+    };
+  }
+
+  private async adjustUsage(userId: string, deltaKits: number, deltaBytes: number): Promise<void> {
+    // Atomic ADD: initialise counters to 0 if the item doesn't exist.
+    await this.ddb.send(
+      new UpdateCommand({
+        TableName: this.table,
+        Key: { userId, kitId: USAGE_ITEM_KIT_ID },
+        UpdateExpression: "ADD kitCount :dk, #bytes :db",
+        ExpressionAttributeNames: { "#bytes": "bytes" },
+        ExpressionAttributeValues: { ":dk": deltaKits, ":db": deltaBytes }
+      })
+    );
+  }
+
+  private treeBytes(tree: KitTree): number {
+    return tree.files.reduce((sum, f) => sum + kitFileBytes(f.content, f.encoding), 0);
+  }
+
+  // -------------------------------------------------------------------------
+
   async createKit(userId: string, input: CreateKitInput): Promise<KitMetadataRecord> {
     assertSafeSegment(userId, "userId");
     const kitId = randomUUID();
@@ -104,9 +142,30 @@ export class AwsKitStore implements KitStore {
       name = input.name ?? parseKitName(tree);
     }
 
+    // Quota check (skip for template — core guarantees validity + bounded size).
+    if (input.kind !== "template") {
+      const limits = getQuotaLimits();
+      const usage = await this.getUsage(userId);
+      if (usage.kitCount >= limits.maxKits) {
+        throw new QuotaExceededError(
+          "kit-count",
+          `Kit quota exceeded: you already have ${usage.kitCount} of ${limits.maxKits} kits. Delete a kit to make room.`
+        );
+      }
+      const addedBytes = this.treeBytes(tree);
+      if (usage.bytes + addedBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: adding this kit would use ${Math.round((usage.bytes + addedBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
+    const addedBytes = this.treeBytes(tree);
     await this.trees.putTree(userId, kitId, tree);
     const metadata: KitMetadataRecord = { kitId, ownerUserId: userId, name, createdAt: now, updatedAt: now, source };
     await this.ddb.send(new PutCommand({ TableName: this.table, Item: { userId, ...metadata } }));
+    await this.adjustUsage(userId, 1, addedBytes);
     return metadata;
   }
 
@@ -119,7 +178,10 @@ export class AwsKitStore implements KitStore {
         ExpressionAttributeValues: { ":u": userId }
       })
     );
-    const records = (res.Items ?? []).map(toMetadata);
+    // Exclude the synthetic usage sentinel item from the kit listing.
+    const records = (res.Items ?? [])
+      .filter((item) => item.kitId !== USAGE_ITEM_KIT_ID)
+      .map(toMetadata);
     records.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
     return records;
   }
@@ -144,27 +206,62 @@ export class AwsKitStore implements KitStore {
 
   async writeKitFile(userId: string, kitId: string, file: KitFile): Promise<void> {
     await this.requireKit(userId, kitId);
+    const limits = getQuotaLimits();
+    const newFileBytes = kitFileBytes(file.content, file.encoding);
+    if (newFileBytes > limits.maxBytesPerFile) {
+      throw new QuotaExceededError(
+        "file-bytes",
+        `File too large: ${Math.round(newFileBytes / 1024 / 1024)} MB exceeds the ${Math.round(limits.maxBytesPerFile / 1024 / 1024)} MB per-file limit.`
+      );
+    }
+
     const rel = normalizeRelPath(file.path);
     const tree = await this.trees.getTree(userId, kitId);
+    const existing = tree.files.find((f) => f.path === rel);
+    const oldBytes = existing ? kitFileBytes(existing.content, existing.encoding) : 0;
+    const deltaBytes = newFileBytes - oldBytes;
+
+    if (deltaBytes > 0) {
+      const usage = await this.getUsage(userId);
+      if (usage.bytes + deltaBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: saving this file would use ${Math.round((usage.bytes + deltaBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
     const files = tree.files.filter((f) => f.path !== rel);
     files.push({ path: rel, content: file.content, encoding: file.encoding ?? "utf8" });
     await this.trees.putTree(userId, kitId, { files });
     await this.touch(userId, kitId);
+    if (deltaBytes !== 0) await this.adjustUsage(userId, 0, deltaBytes);
   }
 
   async deleteKitFile(userId: string, kitId: string, filePath: string): Promise<void> {
     await this.requireKit(userId, kitId);
     const rel = normalizeRelPath(filePath);
     const tree = await this.trees.getTree(userId, kitId);
+    const existing = tree.files.find((f) => f.path === rel);
+    const removedBytes = existing ? kitFileBytes(existing.content, existing.encoding) : 0;
     await this.trees.putTree(userId, kitId, { files: tree.files.filter((f) => f.path !== rel) });
     await this.touch(userId, kitId);
+    if (removedBytes > 0) await this.adjustUsage(userId, 0, -removedBytes);
   }
 
   async deleteKit(userId: string, kitId: string): Promise<void> {
     assertSafeSegment(userId, "userId");
     assertSafeSegment(kitId, "kitId");
+    let removedBytes = 0;
+    try {
+      const tree = await this.trees.getTree(userId, kitId);
+      removedBytes = this.treeBytes(tree);
+    } catch {
+      // Tree may not exist.
+    }
     await this.trees.deleteTree(userId, kitId);
     await this.ddb.send(new DeleteCommand({ TableName: this.table, Key: { userId, kitId } }));
+    await this.adjustUsage(userId, -1, -removedBytes);
   }
 
   // --- favorites: vestigial (moved to Market in Phase 3) --------------------

@@ -8,6 +8,40 @@ import { readTreeFromDir, withEphemeralTree, withMaterializedKit } from "@/serve
 import { getKitStore } from "@/server/store/local-disk";
 import type { KitTree } from "@/server/store/types";
 
+// --- validation gate ---------------------------------------------------------
+
+/**
+ * Thrown when an uploaded/imported kit fails the local-valid profile.
+ * Callers map this to HTTP 422.
+ */
+export class KitValidationError extends Error {
+  readonly issues: string[];
+  constructor(issues: string[]) {
+    super(issues[0] ?? "Kit did not pass local-valid validation.");
+    this.name = "KitValidationError";
+    this.issues = issues;
+  }
+}
+
+/**
+ * Materialize `tree` into a temp dir and run `validateAgentKit` at the
+ * `local-valid` profile. Throws `KitValidationError` if validation fails.
+ * Use this for import flows ONLY — not for per-file editor saves (WIP drafts
+ * must be temporarily invalid).
+ */
+export async function assertKitValid(tree: KitTree): Promise<void> {
+  await withEphemeralTree(tree, async ({ core, kitRoot }) => {
+    const report = await core.validateAgentKit(kitRoot, "local-valid");
+    const failed = (report as { valid?: boolean; errors?: string[] | { message?: string }[] });
+    if (failed.valid === false) {
+      const issues: string[] = (failed.errors ?? []).map((e: unknown) =>
+        typeof e === "string" ? e : (e as { message?: string }).message ?? String(e)
+      );
+      throw new KitValidationError(issues.length > 0 ? issues : ["Kit did not pass local-valid validation."]);
+    }
+  });
+}
+
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 
 // --- validate ----------------------------------------------------------------
@@ -114,6 +148,8 @@ export async function createKitFromDraft(userId: string, draftJson: unknown) {
     const renderedRoot = (result as { rootPath?: string }).rootPath ?? outFolder;
     return readTreeFromDir(renderedRoot);
   });
+  // Gate: a rendered draft must be a valid kit before persisting.
+  await assertKitValid(tree);
   const store = await getKitStore();
   return store.createKit(userId, { kind: "tree", tree, source: "draft" });
 }
@@ -121,6 +157,8 @@ export async function createKitFromDraft(userId: string, draftJson: unknown) {
 // --- import: upload .agentkit.zip -> new kit ---------------------------------
 export async function importPackageZip(userId: string, zipBytes: Buffer): Promise<{ kitId: string }> {
   const tree = await unzipToTree(zipBytes);
+  // Gate: reject non-kit zips (anti-free-file-store). WIP editor saves bypass this.
+  await assertKitValid(tree);
   const store = await getKitStore();
   const meta = await store.createKit(userId, { kind: "tree", tree, source: "upload-zip" });
   return { kitId: meta.kitId };

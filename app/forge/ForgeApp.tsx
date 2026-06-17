@@ -109,6 +109,13 @@ function initials(email?: string): string {
   return (parts[0]?.[0] ?? name[0] ?? "").concat(parts[1]?.[0] ?? "").toUpperCase();
 }
 
+type UsageInfo = { kitCount: number; kitLimit: number; bytes: number; byteLimit: number } | null;
+
+function fmtBytes(b: number): string {
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
 export default function ForgeApp({ user }: { user: SessionUser }) {
   const forge = useMemo(() => getForgeClient(), []);
   const [section, setSection] = useState<SectionId>("my-kits");
@@ -117,10 +124,20 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
   const [openKitId, setOpenKitId] = useState<string | null>(null);
   const [submitKitId, setSubmitKitId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ msg: string; err?: boolean } | null>(null);
+  const [usage, setUsage] = useState<UsageInfo>(null);
 
   const notify = useCallback<Notify>((msg, err = false) => {
     setToast({ msg, err });
     setTimeout(() => setToast(null), 4200);
+  }, []);
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      const res = await fetch("/api/me/usage", { credentials: "include" });
+      if (res.ok) setUsage((await res.json()) as UsageInfo);
+    } catch {
+      // non-critical
+    }
   }, []);
 
   const refresh = useCallback(async () => {
@@ -134,7 +151,8 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
     } catch (e) {
       notify(errMsg(e), true);
     }
-  }, [forge, notify]);
+    await refreshUsage();
+  }, [forge, notify, refreshUsage]);
 
   useEffect(() => {
     void refresh();
@@ -208,6 +226,7 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
               forge={forge}
               kits={kits}
               favorites={favorites}
+              usage={usage}
               notify={notify}
               onOpen={(id) => setOpenKitId(id)}
               onSubmit={(id) => setSubmitKitId(id)}
@@ -248,6 +267,7 @@ function MyKits({
   forge,
   kits,
   favorites,
+  usage,
   notify,
   onOpen,
   onSubmit,
@@ -258,6 +278,7 @@ function MyKits({
   forge: Forge;
   kits: MyKitEntry[];
   favorites: Favorite[];
+  usage: UsageInfo;
   notify: Notify;
   onOpen: (id: string) => void;
   onSubmit: (id: string) => void;
@@ -315,7 +336,17 @@ function MyKits({
   return (
     <div className="my-kits-screen">
       <div className="screen-toolbar">
-        <strong>{kits.length} owned (built &amp; imported) · {favorites.length} favorited</strong>
+        <div>
+          <strong>{kits.length} owned (built &amp; imported) · {favorites.length} favorited</strong>
+          {usage && (
+            <p className="form-copy" style={{ marginTop: 2, marginBottom: 0 }}>
+              {usage.kitCount}/{usage.kitLimit} kits &middot; {fmtBytes(usage.bytes)}/{fmtBytes(usage.byteLimit)} storage
+              {usage.kitCount >= usage.kitLimit && (
+                <span style={{ color: "var(--color-error)", marginLeft: 8 }}>Kit limit reached.</span>
+              )}
+            </p>
+          )}
+        </div>
         <div className="button-row">
           <button className="secondary-button" onClick={onImport}>Import a kit</button>
           <button className="primary-button" onClick={onBuild}>Build a kit</button>

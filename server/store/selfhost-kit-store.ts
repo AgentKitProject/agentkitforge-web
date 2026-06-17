@@ -23,6 +23,7 @@ import { S3TreeStore } from "@/server/store/s3-tree";
 import { materializeTemplateTree } from "@/server/store/template-tree";
 import { assertSafeSegment, normalizeRelPath, parseKitName } from "@/server/store/shared";
 import { ensureSchema, type PgPool } from "@/server/store/selfhost-pg";
+import { getQuotaLimits, kitFileBytes, QuotaExceededError } from "@/server/store/quota";
 import {
   type CreateKitInput,
   type FavoriteRecord,
@@ -92,6 +93,39 @@ export class SelfHostKitStore implements KitStore {
     }
   }
 
+  // --- quota ---------------------------------------------------------------
+
+  async getUsage(userId: string): Promise<{ kitCount: number; bytes: number }> {
+    await this.init();
+    assertSafeSegment(userId, "userId");
+    const res = await this.pool.query(
+      `SELECT kit_count, bytes FROM kit_usage WHERE user_id = $1`,
+      [userId]
+    );
+    if (!res.rows[0]) return { kitCount: 0, bytes: 0 };
+    return {
+      kitCount: Number(res.rows[0].kit_count),
+      bytes: Number(res.rows[0].bytes)
+    };
+  }
+
+  private async adjustUsage(userId: string, deltaKits: number, deltaBytes: number): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO kit_usage (user_id, kit_count, bytes)
+         VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE
+         SET kit_count = GREATEST(0, kit_usage.kit_count + $2),
+             bytes     = GREATEST(0, kit_usage.bytes     + $3)`,
+      [userId, deltaKits, deltaBytes]
+    );
+  }
+
+  private treeBytes(tree: KitTree): number {
+    return tree.files.reduce((sum, f) => sum + kitFileBytes(f.content, f.encoding), 0);
+  }
+
+  // -------------------------------------------------------------------------
+
   async createKit(userId: string, input: CreateKitInput): Promise<KitMetadataRecord> {
     await this.init();
     assertSafeSegment(userId, "userId");
@@ -111,12 +145,33 @@ export class SelfHostKitStore implements KitStore {
       name = input.name ?? parseKitName(tree);
     }
 
+    // Quota check (skip for template).
+    if (input.kind !== "template") {
+      const limits = getQuotaLimits();
+      const usage = await this.getUsage(userId);
+      if (usage.kitCount >= limits.maxKits) {
+        throw new QuotaExceededError(
+          "kit-count",
+          `Kit quota exceeded: you already have ${usage.kitCount} of ${limits.maxKits} kits. Delete a kit to make room.`
+        );
+      }
+      const addedBytes = this.treeBytes(tree);
+      if (usage.bytes + addedBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: adding this kit would use ${Math.round((usage.bytes + addedBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
+    const addedBytes = this.treeBytes(tree);
     await this.trees.putTree(userId, kitId, tree);
     await this.pool.query(
       `INSERT INTO kit_metadata (user_id, kit_id, name, source, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6)`,
       [userId, kitId, name ?? null, source, now, now]
     );
+    await this.adjustUsage(userId, 1, addedBytes);
     return { kitId, ownerUserId: userId, name, createdAt: now, updatedAt: now, source };
   }
 
@@ -154,28 +209,63 @@ export class SelfHostKitStore implements KitStore {
 
   async writeKitFile(userId: string, kitId: string, file: KitFile): Promise<void> {
     await this.requireKit(userId, kitId);
+    const limits = getQuotaLimits();
+    const newFileBytes = kitFileBytes(file.content, file.encoding);
+    if (newFileBytes > limits.maxBytesPerFile) {
+      throw new QuotaExceededError(
+        "file-bytes",
+        `File too large: ${Math.round(newFileBytes / 1024 / 1024)} MB exceeds the ${Math.round(limits.maxBytesPerFile / 1024 / 1024)} MB per-file limit.`
+      );
+    }
+
     const rel = normalizeRelPath(file.path);
     const tree = await this.trees.getTree(userId, kitId);
+    const existing = tree.files.find((f) => f.path === rel);
+    const oldBytes = existing ? kitFileBytes(existing.content, existing.encoding) : 0;
+    const deltaBytes = newFileBytes - oldBytes;
+
+    if (deltaBytes > 0) {
+      const usage = await this.getUsage(userId);
+      if (usage.bytes + deltaBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: saving this file would use ${Math.round((usage.bytes + deltaBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
     const files = tree.files.filter((f) => f.path !== rel);
     files.push({ path: rel, content: file.content, encoding: file.encoding ?? "utf8" });
     await this.trees.putTree(userId, kitId, { files });
     await this.touch(userId, kitId);
+    if (deltaBytes !== 0) await this.adjustUsage(userId, 0, deltaBytes);
   }
 
   async deleteKitFile(userId: string, kitId: string, filePath: string): Promise<void> {
     await this.requireKit(userId, kitId);
     const rel = normalizeRelPath(filePath);
     const tree = await this.trees.getTree(userId, kitId);
+    const existing = tree.files.find((f) => f.path === rel);
+    const removedBytes = existing ? kitFileBytes(existing.content, existing.encoding) : 0;
     await this.trees.putTree(userId, kitId, { files: tree.files.filter((f) => f.path !== rel) });
     await this.touch(userId, kitId);
+    if (removedBytes > 0) await this.adjustUsage(userId, 0, -removedBytes);
   }
 
   async deleteKit(userId: string, kitId: string): Promise<void> {
     await this.init();
     assertSafeSegment(userId, "userId");
     assertSafeSegment(kitId, "kitId");
+    let removedBytes = 0;
+    try {
+      const tree = await this.trees.getTree(userId, kitId);
+      removedBytes = this.treeBytes(tree);
+    } catch {
+      // Tree may not exist.
+    }
     await this.trees.deleteTree(userId, kitId);
     await this.pool.query(`DELETE FROM kit_metadata WHERE user_id = $1 AND kit_id = $2`, [userId, kitId]);
+    await this.adjustUsage(userId, -1, -removedBytes);
   }
 
   // --- favorites: vestigial (moved to Market in Phase 3) --------------------

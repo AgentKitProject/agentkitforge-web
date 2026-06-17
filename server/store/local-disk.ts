@@ -25,10 +25,14 @@ import {
   type KitStore,
   type KitTree
 } from "@/server/store/types";
+import { getQuotaLimits, kitFileBytes, QuotaExceededError } from "@/server/store/quota";
 
 const TREE_DIR = "tree";
 const METADATA_FILE = "metadata.json";
 const FAVORITES_FILE = "favorites.json";
+const USAGE_FILE = "usage.json";
+
+type UsageRecord = { kitCount: number; bytes: number };
 
 function dataDir(): string {
   return process.env.AGENTKITFORGE_WEB_DATA_DIR || path.resolve(process.cwd(), ".agentkitforge-web-data");
@@ -135,6 +139,35 @@ function parseKitName(tree: KitTree): string | undefined {
 }
 
 export class LocalDiskKitStore implements KitStore {
+  // --- quota helpers -------------------------------------------------------
+
+  private usageFile(userId: string): string {
+    return path.join(userDir(userId), USAGE_FILE);
+  }
+
+  private async readUsage(userId: string): Promise<UsageRecord> {
+    return readJson<UsageRecord>(this.usageFile(userId), { kitCount: 0, bytes: 0 });
+  }
+
+  private async adjustUsage(userId: string, deltaKits: number, deltaBytes: number): Promise<void> {
+    const current = await this.readUsage(userId);
+    const next: UsageRecord = {
+      kitCount: Math.max(0, current.kitCount + deltaKits),
+      bytes: Math.max(0, current.bytes + deltaBytes)
+    };
+    await writeJson(this.usageFile(userId), next);
+  }
+
+  private treeBytes(tree: KitTree): number {
+    return tree.files.reduce((sum, f) => sum + kitFileBytes(f.content, f.encoding), 0);
+  }
+
+  async getUsage(userId: string): Promise<{ kitCount: number; bytes: number }> {
+    return this.readUsage(userId);
+  }
+
+  // --- owned kits ----------------------------------------------------------
+
   async createKit(userId: string, input: CreateKitInput): Promise<KitMetadataRecord> {
     const kitId = randomUUID();
     const now = new Date().toISOString();
@@ -167,10 +200,31 @@ export class LocalDiskKitStore implements KitStore {
       name = input.name ?? parseKitName(tree);
     }
 
+    // Quota check (skip for template — core guarantees validity + bounded size).
+    if (input.kind !== "template") {
+      const limits = getQuotaLimits();
+      const usage = await this.readUsage(userId);
+      if (usage.kitCount >= limits.maxKits) {
+        throw new QuotaExceededError(
+          "kit-count",
+          `Kit quota exceeded: you already have ${usage.kitCount} of ${limits.maxKits} kits. Delete a kit to make room.`
+        );
+      }
+      const addedBytes = this.treeBytes(tree);
+      if (usage.bytes + addedBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: adding this kit would use ${Math.round((usage.bytes + addedBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
+    const addedBytes = this.treeBytes(tree);
     const dir = kitDir(userId, kitId);
     await writeTreeToDir(path.join(dir, TREE_DIR), tree);
     const metadata: KitMetadataRecord = { kitId, ownerUserId: userId, name, createdAt: now, updatedAt: now, source };
     await writeJson(path.join(dir, METADATA_FILE), metadata);
+    await this.adjustUsage(userId, 1, addedBytes);
     return metadata;
   }
 
@@ -210,23 +264,72 @@ export class LocalDiskKitStore implements KitStore {
 
   async writeKitFile(userId: string, kitId: string, file: KitFile): Promise<void> {
     await this.requireKit(userId, kitId);
+    const limits = getQuotaLimits();
+    const newFileBytes = kitFileBytes(file.content, file.encoding);
+    if (newFileBytes > limits.maxBytesPerFile) {
+      throw new QuotaExceededError(
+        "file-bytes",
+        `File too large: ${Math.round(newFileBytes / 1024 / 1024)} MB exceeds the ${Math.round(limits.maxBytesPerFile / 1024 / 1024)} MB per-file limit.`
+      );
+    }
+
+    // Compute old file size for delta (if file exists).
     const rel = normalizeRelPath(file.path);
     const abs = path.join(kitDir(userId, kitId), TREE_DIR, rel);
+    let oldBytes = 0;
+    try {
+      const oldBuf = await fs.readFile(abs);
+      oldBytes = oldBuf.length;
+    } catch {
+      // File didn't exist — delta is just the new size.
+    }
+    const deltaBytes = newFileBytes - oldBytes;
+
+    // Check total bytes quota only when growing.
+    if (deltaBytes > 0) {
+      const usage = await this.readUsage(userId);
+      if (usage.bytes + deltaBytes > limits.maxBytes) {
+        throw new QuotaExceededError(
+          "total-bytes",
+          `Storage quota exceeded: saving this file would use ${Math.round((usage.bytes + deltaBytes) / 1024 / 1024)} MB of your ${Math.round(limits.maxBytes / 1024 / 1024)} MB limit.`
+        );
+      }
+    }
+
     await fs.mkdir(path.dirname(abs), { recursive: true });
     const buf = file.encoding === "base64" ? Buffer.from(file.content, "base64") : Buffer.from(file.content, "utf8");
     await fs.writeFile(abs, buf);
     await this.touch(userId, kitId);
+    if (deltaBytes !== 0) await this.adjustUsage(userId, 0, deltaBytes);
   }
 
   async deleteKitFile(userId: string, kitId: string, filePath: string): Promise<void> {
     await this.requireKit(userId, kitId);
     const rel = normalizeRelPath(filePath);
-    await fs.rm(path.join(kitDir(userId, kitId), TREE_DIR, rel), { force: true });
+    const abs = path.join(kitDir(userId, kitId), TREE_DIR, rel);
+    let removedBytes = 0;
+    try {
+      const buf = await fs.readFile(abs);
+      removedBytes = buf.length;
+    } catch {
+      // File didn't exist — nothing to remove.
+    }
+    await fs.rm(abs, { force: true });
     await this.touch(userId, kitId);
+    if (removedBytes > 0) await this.adjustUsage(userId, 0, -removedBytes);
   }
 
   async deleteKit(userId: string, kitId: string): Promise<void> {
+    // Compute tree size before deleting so we can decrement usage.
+    let removedBytes = 0;
+    try {
+      const tree = await readTreeFromDir(path.join(kitDir(userId, kitId), TREE_DIR));
+      removedBytes = this.treeBytes(tree);
+    } catch {
+      // Kit may not exist — just delete.
+    }
     await fs.rm(kitDir(userId, kitId), { recursive: true, force: true });
+    await this.adjustUsage(userId, -1, -removedBytes);
   }
 
   async addFavorite(userId: string, favorite: FavoriteRecord): Promise<FavoriteRecord> {
