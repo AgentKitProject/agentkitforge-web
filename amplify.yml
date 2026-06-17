@@ -1,0 +1,51 @@
+version: 1
+frontend:
+  phases:
+    preBuild:
+      commands:
+        # Fail fast on missing required runtime config (hosted/aws backend).
+        - 'test -n "$WORKOS_API_KEY" || (echo "Missing required env var: WORKOS_API_KEY" && exit 1)'
+        - 'test -n "$WORKOS_CLIENT_ID" || (echo "Missing required env var: WORKOS_CLIENT_ID" && exit 1)'
+        - 'test -n "$WORKOS_COOKIE_PASSWORD" || (echo "Missing required env var: WORKOS_COOKIE_PASSWORD" && exit 1)'
+        - 'test -n "$APP_URL" || (echo "Missing required env var: APP_URL" && exit 1)'
+        - 'test -n "$WORKOS_REDIRECT_URI" || (echo "Missing required env var: WORKOS_REDIRECT_URI" && exit 1)'
+        - 'case "$APP_URL" in *localhost*) echo "APP_URL must not use localhost for production hosting" && exit 1;; esac'
+        - 'test -n "$KITSTORE_BACKEND" || (echo "Missing required env var: KITSTORE_BACKEND" && exit 1)'
+        - 'test "$KITSTORE_BACKEND" != "aws" || test -n "$DYNAMODB_KITS_TABLE" || (echo "aws backend requires DYNAMODB_KITS_TABLE" && exit 1)'
+        - 'test "$KITSTORE_BACKEND" != "aws" || test -n "$DYNAMODB_SETTINGS_TABLE" || (echo "aws backend requires DYNAMODB_SETTINGS_TABLE" && exit 1)'
+        - 'test "$KITSTORE_BACKEND" != "aws" || test -n "$S3_BUCKET" || (echo "aws backend requires S3_BUCKET" && exit 1)'
+        - 'test -n "$AGENTKITFORGE_WEB_SECRET" || (echo "Missing required env var: AGENTKITFORGE_WEB_SECRET" && exit 1)'
+        - 'test -n "$AGENTKITMARKET_BASE_URL" || (echo "Missing required env var: AGENTKITMARKET_BASE_URL" && exit 1)'
+        # Bake server config into .env.production so the SSR runtime reliably
+        # sees it (mirrors agentkitmarket-app; avoids a Bridge-4-style silent
+        # null-env failure). Values written to a file, never echoed to logs.
+        - 'printf "WORKOS_API_KEY=%s\n" "$WORKOS_API_KEY" > .env.production'
+        - 'printf "WORKOS_CLIENT_ID=%s\n" "$WORKOS_CLIENT_ID" >> .env.production'
+        - 'printf "WORKOS_COOKIE_PASSWORD=%s\n" "$WORKOS_COOKIE_PASSWORD" >> .env.production'
+        - 'printf "WORKOS_COOKIE_DOMAIN=%s\n" "$WORKOS_COOKIE_DOMAIN" >> .env.production'
+        - 'printf "WORKOS_REDIRECT_URI=%s\n" "$WORKOS_REDIRECT_URI" >> .env.production'
+        - 'printf "APP_URL=%s\n" "$APP_URL" >> .env.production'
+        - 'printf "KITSTORE_BACKEND=%s\n" "$KITSTORE_BACKEND" >> .env.production'
+        - 'printf "DYNAMODB_KITS_TABLE=%s\n" "$DYNAMODB_KITS_TABLE" >> .env.production'
+        - 'printf "DYNAMODB_SETTINGS_TABLE=%s\n" "$DYNAMODB_SETTINGS_TABLE" >> .env.production'
+        - 'printf "S3_BUCKET=%s\n" "$S3_BUCKET" >> .env.production'
+        - 'printf "S3_PREFIX=%s\n" "$S3_PREFIX" >> .env.production'
+        - 'printf "AWS_REGION=%s\n" "$AWS_REGION" >> .env.production'
+        - 'printf "AWS_ACCESS_KEY_ID=%s\n" "$AWS_ACCESS_KEY_ID" >> .env.production'
+        - 'printf "AWS_SECRET_ACCESS_KEY=%s\n" "$AWS_SECRET_ACCESS_KEY" >> .env.production'
+        - 'printf "AGENTKITFORGE_WEB_SECRET=%s\n" "$AGENTKITFORGE_WEB_SECRET" >> .env.production'
+        - 'printf "AGENTKITMARKET_BASE_URL=%s\n" "$AGENTKITMARKET_BASE_URL" >> .env.production'
+        - 'printf "AGENTKITFORGE_AI_PROVIDER_CONFIG=%s\n" "$AGENTKITFORGE_AI_PROVIDER_CONFIG" >> .env.production'
+        - 'printf "AGENTKITPROJECT_WORKOS_CLIENT_ID=%s\n" "$AGENTKITPROJECT_WORKOS_CLIENT_ID" >> .env.production'
+        - 'npm ci'
+    build:
+      commands:
+        - 'npm run build'
+  artifacts:
+    baseDirectory: .next
+    files:
+      - '**/*'
+  cache:
+    paths:
+      - 'node_modules/**/*'
+      - '.next/cache/**/*'
