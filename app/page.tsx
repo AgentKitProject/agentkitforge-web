@@ -1,14 +1,7 @@
-// Phase 1 is a backend only. This placeholder page confirms the server is up;
-// the Phase 2 web UI (a FetchForgeClient against /api/*) replaces it.
-//
-// NOTE: this is a server component. @agentkitforge/core is Node-only and must
-// NEVER be imported into a client component.
+import { redirect } from "next/navigation";
+
+// Root permanently redirects to the app entry point.
+// /health and /api/* are unaffected (matched before this page).
 export default function HomePage() {
-  return (
-    <main style={{ fontFamily: "system-ui", padding: "2rem" }}>
-      <h1>AgentKitForge Web</h1>
-      <p>The HTTP API lives under <code>/api/*</code>. See <code>/health</code>.</p>
-      <p>Open the Phase 2 web UI: <a href="/forge">/forge</a></p>
-    </main>
-  );
+  redirect("/forge");
 }

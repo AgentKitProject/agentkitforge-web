@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 function buildAuthCallback() {
   return handleAuth({
     baseURL: getAppUrl(),
-    returnPathname: "/",
+    returnPathname: "/forge",
     onSuccess: async ({ accessToken, refreshToken, user, impersonator, authenticationMethod }) => {
       await saveSession(
         { accessToken, refreshToken, user, impersonator, authenticationMethod },
