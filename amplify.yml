@@ -30,9 +30,11 @@ frontend:
         - 'printf "DYNAMODB_SETTINGS_TABLE=%s\n" "$DYNAMODB_SETTINGS_TABLE" >> .env.production'
         - 'printf "S3_BUCKET=%s\n" "$S3_BUCKET" >> .env.production'
         - 'printf "S3_PREFIX=%s\n" "$S3_PREFIX" >> .env.production'
-        - 'printf "AWS_REGION=%s\n" "$AWS_REGION" >> .env.production'
-        - 'printf "AWS_ACCESS_KEY_ID=%s\n" "$AWS_ACCESS_KEY_ID" >> .env.production'
-        - 'printf "AWS_SECRET_ACCESS_KEY=%s\n" "$AWS_SECRET_ACCESS_KEY" >> .env.production'
+        # AWS_* env names are reserved by Amplify; the SSR aws KitStore adapter
+        # reads these FORGE_AWS_* vars instead (see server/store/index.ts).
+        - 'printf "FORGE_AWS_REGION=%s\n" "$FORGE_AWS_REGION" >> .env.production'
+        - 'printf "FORGE_AWS_ACCESS_KEY_ID=%s\n" "$FORGE_AWS_ACCESS_KEY_ID" >> .env.production'
+        - 'printf "FORGE_AWS_SECRET_ACCESS_KEY=%s\n" "$FORGE_AWS_SECRET_ACCESS_KEY" >> .env.production'
         - 'printf "AGENTKITFORGE_WEB_SECRET=%s\n" "$AGENTKITFORGE_WEB_SECRET" >> .env.production'
         - 'printf "AGENTKITMARKET_BASE_URL=%s\n" "$AGENTKITMARKET_BASE_URL" >> .env.production'
         - 'printf "AGENTKITFORGE_AI_PROVIDER_CONFIG=%s\n" "$AGENTKITFORGE_AI_PROVIDER_CONFIG" >> .env.production'

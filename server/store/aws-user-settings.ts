@@ -28,6 +28,8 @@ import {
 export type AwsUserSettingsConfig = {
   settingsTable: string;
   region?: string;
+  /** Explicit AWS credentials (FORGE_AWS_* on Amplify SSR); see AwsKitStoreConfig. */
+  credentials?: { accessKeyId: string; secretAccessKey: string };
   dynamoEndpoint?: string;
 };
 
@@ -42,6 +44,7 @@ export class AwsUserSettingsStore implements UserSettingsStore {
       DynamoDBDocumentClient.from(
         new DynamoDBClient({
           region: config.region ?? "us-east-1",
+          ...(config.credentials ? { credentials: config.credentials } : {}),
           ...(config.dynamoEndpoint ? { endpoint: config.dynamoEndpoint } : {})
         }),
         { marshallOptions: { removeUndefinedValues: true } }

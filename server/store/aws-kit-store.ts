@@ -42,6 +42,13 @@ export type AwsKitStoreConfig = {
   s3Bucket: string;
   s3Prefix?: string;
   region?: string;
+  /**
+   * Explicit AWS credentials. Needed on Amplify SSR, whose managed compute role
+   * can't be granted DynamoDB/S3 access — a scoped IAM user's keys are injected
+   * via FORGE_AWS_* env vars (AWS_* names are reserved by Amplify). When absent,
+   * the default credential chain is used (local role / env / profile).
+   */
+  credentials?: { accessKeyId: string; secretAccessKey: string };
   /** Optional endpoint override (e.g. dynamodb-local / LocalStack for tests). */
   dynamoEndpoint?: string;
   s3Endpoint?: string;
@@ -57,11 +64,13 @@ export class AwsKitStore implements KitStore {
   constructor(config: AwsKitStoreConfig, deps?: { ddb?: DynamoDBDocumentClient; s3?: S3Client }) {
     this.table = config.kitsTable;
     const region = config.region ?? "us-east-1";
+    const creds = config.credentials ? { credentials: config.credentials } : {};
     this.ddb =
       deps?.ddb ??
       DynamoDBDocumentClient.from(
         new DynamoDBClient({
           region,
+          ...creds,
           ...(config.dynamoEndpoint ? { endpoint: config.dynamoEndpoint } : {})
         }),
         { marshallOptions: { removeUndefinedValues: true } }
@@ -70,6 +79,7 @@ export class AwsKitStore implements KitStore {
       deps?.s3 ??
       new S3Client({
         region,
+        ...creds,
         ...(config.s3Endpoint ? { endpoint: config.s3Endpoint } : {}),
         ...(config.s3ForcePathStyle ? { forcePathStyle: true } : {})
       });
