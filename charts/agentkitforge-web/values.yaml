@@ -1,0 +1,132 @@
+# ---------------------------------------------------------------------------
+# AgentKitForge WebApp — self-host Helm chart.
+#
+# One runtime-configured Next.js standalone image (`node server.js`) with
+# KITSTORE_BACKEND=selfhost: kit trees in MinIO/S3, metadata + per-user settings
+# in Postgres. Both data services are bundled (in-cluster, persistent) by
+# default; their in-cluster URLs auto-default so the secret only needs the
+# genuinely-secret values (WorkOS, the AES key, and the bundled-service
+# passwords). Mirrors the agentkitmarket chart.
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Pull secrets for the (private) GHCR image. The homelab GitOps manifests sync a
+# `ghcr-pull-secret-infisical` dockerconfigjson Secret.
+# ---------------------------------------------------------------------------
+imagePullSecrets: []
+#  - name: ghcr-pull-secret-infisical
+
+# ---------------------------------------------------------------------------
+# Web app (the Next.js standalone server)
+# ---------------------------------------------------------------------------
+web:
+  enabled: true
+  replicas: 1
+  port: 3000
+  image:
+    repository: ghcr.io/agentkitproject/agentkitforge-web
+    tag: "latest"      # override with a release tag/sha for reproducible deploys
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+  service:
+    type: ClusterIP
+    port: 80
+  # Non-secret runtime config (ConfigMap). Most defaults are derived in-cluster;
+  # set appUrl / workosRedirectUri to your public origin so AuthKit redirects
+  # resolve. These can also live in the external secret instead.
+  config:
+    # Public origin of the web app (APP_URL / NEXT_PUBLIC_APP_URL). Usually
+    # supplied via the external secret (Infisical key APP_URL); set here only to
+    # override.
+    appUrl: ""
+    # WorkOS redirect URI (WORKOS_REDIRECT_URI). Empty → "<appUrl>/auth/callback".
+    workosRedirectUri: ""
+    # Base URL of the AgentKitMarket app for import/favorites/licensed flows
+    # (AGENTKITMARKET_BASE_URL). Defaults to the public hosted Market.
+    marketBaseUrl: "https://market.agentkitproject.com"
+    # WorkOS client id used by the core market client for device/licensed flows
+    # (AGENTKITPROJECT_WORKOS_CLIENT_ID). Optional; usually equals workosClientId.
+    agentkitprojectWorkosClientId: ""
+    # S3/MinIO bucket holding kit trees (S3_BUCKET). Defaults to minio.bucket.
+    s3Bucket: ""
+    # Optional key prefix within the bucket (S3_PREFIX).
+    s3Prefix: ""
+    # S3 region (AWS_REGION); us-east-1 is fine for MinIO.
+    s3Region: "us-east-1"
+  # Secret runtime config. Bring your own WorkOS. Either set inline (use a
+  # --values secrets.yaml NOT committed to git) or — recommended — source from an
+  # existing Secret (e.g. one synced by Infisical) via existingSecret.
+  secrets:
+    # Use an externally-managed Secret instead of the chart-managed one. When set,
+    # the inline values below are ignored and the web container envFroms it, and
+    # the bundled Postgres/MinIO read their passwords from it.
+    #
+    # Required keys in the external Secret (see chart README):
+    #   WORKOS_API_KEY, WORKOS_CLIENT_ID, WORKOS_COOKIE_PASSWORD,
+    #   AGENTKITFORGE_WEB_SECRET, APP_URL, WORKOS_REDIRECT_URI,
+    #   AGENTKITMARKET_BASE_URL, POSTGRES_PASSWORD, MINIO_ROOT_PASSWORD,
+    #   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
+    # (S3_ACCESS_KEY_ID must equal minio.rootUser; S3_SECRET_ACCESS_KEY must equal
+    #  MINIO_ROOT_PASSWORD.)
+    existingSecret: ""
+    # WorkOS AuthKit (required — the web Forge is logged-in by design; every
+    # /api/* route requires an authenticated user).
+    workosApiKey: ""
+    workosClientId: ""
+    # Must be >= 32 chars. Generate with: openssl rand -base64 32
+    workosCookiePassword: ""
+    # AES-256-GCM key for at-rest encryption of per-user AI provider keys
+    # (AGENTKITFORGE_WEB_SECRET). 32-byte hex/base64 or any passphrase.
+    forgeWebSecret: ""
+  # Tailscale (or other) ingress. Leave host empty for the tailscale
+  # defaultBackend pattern (served name comes from tls.hosts).
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    #   tailscale.com/proxy-group: ts-ingress
+    tls: []
+    #  - hosts:
+    #      - forge.example.ts.net
+
+# ---------------------------------------------------------------------------
+# Bundled in-cluster Postgres (metadata + per-user settings).
+# DATABASE_URL auto-defaults to this Service. Disable + provide DATABASE_URL in
+# the secret to point at an external instance.
+# ---------------------------------------------------------------------------
+postgres:
+  enabled: true
+  image: postgres:16
+  database: agentkitforge_web
+  user: agentkitforge
+  # Change before any non-throwaway env; in GitOps this comes from the external
+  # secret (POSTGRES_PASSWORD) and this inline value is ignored.
+  password: "changeme"
+  storage:
+    size: 5Gi
+    storageClassName: local-path
+
+# ---------------------------------------------------------------------------
+# Bundled in-cluster MinIO (kit trees).
+# S3_ENDPOINT auto-defaults to this Service. Disable + provide S3_* in the secret
+# to point at an external S3-compatible store.
+# ---------------------------------------------------------------------------
+minio:
+  enabled: true
+  image: minio/minio:latest
+  bucket: agentkitforge-web
+  # Must equal S3_ACCESS_KEY_ID in the secret.
+  rootUser: minioadmin
+  # Change before any non-throwaway env; in GitOps this comes from the external
+  # secret (MINIO_ROOT_PASSWORD) and this inline value is ignored.
+  rootPassword: "changeme"
+  storage:
+    size: 10Gi
+    storageClassName: local-path

@@ -1,0 +1,52 @@
+{{- if .Values.web.enabled -}}
+{{- $fullname := include "agentkitforge-web.fullname" . -}}
+{{- /* Auto-default in-cluster service URLs so the secret only needs the genuinely-secret values. */ -}}
+{{- $appUrl := .Values.web.config.appUrl -}}
+{{- $redirect := .Values.web.config.workosRedirectUri -}}
+{{- if and (not $redirect) $appUrl -}}
+  {{- $redirect = printf "%s/auth/callback" (trimSuffix "/" $appUrl) -}}
+{{- end -}}
+{{- $s3Bucket := .Values.web.config.s3Bucket -}}
+{{- if and (not $s3Bucket) .Values.minio.enabled -}}
+  {{- $s3Bucket = .Values.minio.bucket -}}
+{{- end -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agentkitforge-web.webConfigmapName" . }}
+  labels:
+    {{- include "agentkitforge-web.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+data:
+  NODE_ENV: "production"
+  PORT: {{ .Values.web.port | quote }}
+  HOSTNAME: "0.0.0.0"
+  KITSTORE_BACKEND: "selfhost"
+  {{- /* Kit data dir is unused under selfhost, but keep a sane default. */}}
+  AGENTKITFORGE_WEB_DATA_DIR: "/tmp/agentkitforge-web-data"
+  {{- if .Values.minio.enabled }}
+  S3_ENDPOINT: {{ include "agentkitforge-web.minioEndpoint" . | quote }}
+  {{- end }}
+  {{- if $s3Bucket }}
+  S3_BUCKET: {{ $s3Bucket | quote }}
+  {{- end }}
+  {{- if .Values.web.config.s3Prefix }}
+  S3_PREFIX: {{ .Values.web.config.s3Prefix | quote }}
+  {{- end }}
+  {{- if .Values.web.config.s3Region }}
+  AWS_REGION: {{ .Values.web.config.s3Region | quote }}
+  {{- end }}
+  {{- if $appUrl }}
+  APP_URL: {{ $appUrl | quote }}
+  NEXT_PUBLIC_APP_URL: {{ $appUrl | quote }}
+  {{- end }}
+  {{- if $redirect }}
+  WORKOS_REDIRECT_URI: {{ $redirect | quote }}
+  {{- end }}
+  {{- if .Values.web.config.marketBaseUrl }}
+  AGENTKITMARKET_BASE_URL: {{ .Values.web.config.marketBaseUrl | quote }}
+  {{- end }}
+  {{- if .Values.web.config.agentkitprojectWorkosClientId }}
+  AGENTKITPROJECT_WORKOS_CLIENT_ID: {{ .Values.web.config.agentkitprojectWorkosClientId | quote }}
+  {{- end }}
+{{- end }}
