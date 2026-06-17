@@ -220,7 +220,7 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
           ) : section === "use" ? (
             <UseSection forge={forge} kits={kits} notify={notify} />
           ) : section === "import" ? (
-            <ImportSection forge={forge} notify={notify} onDone={() => { void refresh(); setSection("my-kits"); }} />
+            <ImportSection forge={forge} notify={notify} onDone={(kitId) => { void refresh().then(() => { setSection("my-kits"); if (kitId) setOpenKitId(kitId); }); }} />
           ) : section === "package-export" ? (
             <PackageExportSection forge={forge} kits={kits} notify={notify} />
           ) : section === "market-submit" ? (
@@ -315,18 +315,19 @@ function MyKits({
   return (
     <div className="my-kits-screen">
       <div className="screen-toolbar">
-        <strong>{kits.length} owned · {favorites.length} favorited</strong>
+        <strong>{kits.length} owned (built &amp; imported) · {favorites.length} favorited</strong>
         <div className="button-row">
           <button className="secondary-button" onClick={onImport}>Import a kit</button>
           <button className="primary-button" onClick={onBuild}>Build a kit</button>
         </div>
       </div>
 
+      <h2 style={{ marginTop: 8 }}>Your Kits (built &amp; imported)</h2>
       {kits.length === 0 ? (
         <div className="empty-state">
           <span className="card-icon"><PackageIcon size={20} /></span>
           <h2>No kits yet</h2>
-          <p>Create one with the AI builder or a template, or import an existing .agentkit.zip / Git repo / Market kit.</p>
+          <p>Create one with the AI builder or a template, or import an existing .agentkit.zip / Git repo / Market kit. Imported kits are saved here and persist across sessions.</p>
         </div>
       ) : (
         <div className="kit-list">
@@ -366,9 +367,9 @@ function MyKits({
         </div>
       )}
 
-      <h2 style={{ marginTop: 8 }}>Favorites (Market references)</h2>
+      <h2 style={{ marginTop: 24 }}>Favorites (Market references — read-only)</h2>
       {favorites.length === 0 ? (
-        <p className="form-copy">No favorites yet. Favorite a Market kit from the Import section to track updates without downloading.</p>
+        <p className="form-copy">No favorites yet. Use the Import tab → From Market → Favorite to track a Market kit&apos;s updates without copying it to your library.</p>
       ) : (
         <div className="kit-list">
           {favorites.map((f) => (
@@ -711,7 +712,7 @@ function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitEntry[];
 // --- Import ------------------------------------------------------------------
 type ImportTab = "zip" | "git" | "market";
 
-function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify; onDone: () => void }) {
+function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify; onDone: (kitId?: string) => void }) {
   const [tab, setTab] = useState<ImportTab>("zip");
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [repoUrl, setRepoUrl] = useState("");
@@ -722,9 +723,10 @@ function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify
   const run = async (fn: () => Promise<unknown>, ok: string) => {
     setBusy(true);
     try {
-      await fn();
+      const result = await fn();
       notify(ok);
-      onDone();
+      const kitId = (result && typeof result === "object" && "kitId" in result) ? String((result as { kitId: string }).kitId) : undefined;
+      onDone(kitId);
     } catch (e) {
       notify(errMsg(e), true);
     } finally {
@@ -750,7 +752,7 @@ function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify
         {tab === "zip" && (
           <div className="form-panel">
             <h2>Upload a package</h2>
-            <p className="form-copy">Import an existing <span className="inline-code">.agentkit.zip</span> into your library. The server validates it on upload.</p>
+            <p className="form-copy">Import an existing <span className="inline-code">.agentkit.zip</span> into <strong>My Kits</strong> (your library). The kit is saved to your account and will appear in My Kits after import.</p>
             <div className="field">
               <label>Package file</label>
               <input type="file" accept=".zip" onChange={(e) => setZipFile(e.target.files?.[0] ?? null)} />
@@ -763,7 +765,7 @@ function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify
         {tab === "git" && (
           <div className="form-panel">
             <h2>Import from a Git repository</h2>
-            <p className="form-copy">Clone a public repository that contains an Agent Kit and import it into your library.</p>
+            <p className="form-copy">Clone a public repository that contains an Agent Kit and save it to <strong>My Kits</strong> (your library). The kit is persisted to your account.</p>
             <div className="field">
               <label>Repository URL</label>
               <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/org/repo.git" />
@@ -784,7 +786,7 @@ function ImportSection({ forge, notify, onDone }: { forge: Forge; notify: Notify
         {tab === "market" && (
           <div className="form-panel">
             <h2>Import from AgentKitMarket</h2>
-            <p className="form-copy">Download a hosted Market kit into your library, or favorite it to track updates without downloading.</p>
+            <p className="form-copy"><strong>Import</strong> downloads the kit into <strong>My Kits</strong> (your library) so you can edit, validate, and package it. <strong>Favorite</strong> saves a reference so you can track updates without downloading a copy.</p>
             <div className="field">
               <label>Market slug</label>
               <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="financial-review" />
