@@ -492,9 +492,121 @@ export class WebForgeClient implements ForgeClient {
       { method: "POST", body: JSON.stringify({ promptId: input.promptId, inputValues: input.inputValues }) }
     );
   }
-  runAgentKitWithAi(): Promise<RunAgentKitResult> {
-    // WEB: live "run kit with AI" is not part of Phase 1's endpoints.
-    throw new NotAvailableOnWebError("runAgentKitWithAi");
+  /**
+   * Run / chat with a kit using MANAGED AI (Gateway Phase 2b).
+   *
+   * Flow:
+   *   1. POST /api/gateway/sessions for the kit (managed billing, selected model)
+   *      → opaque session handle. Reused across turns until end.
+   *   2. POST /api/gateway/sessions/{id}/turn with { userInput, model } → an SSE
+   *      stream of normalized events. We parse `data:` frames and invoke
+   *      `onEvent` for text deltas, usage, and done; `onToken` for raw text.
+   *
+   * CONVERSATIONAL-ONLY this pass: we do NOT pass tools and do NOT execute tools
+   * in the browser. If the stream ever emits a `tool_use` event we ignore it
+   * gracefully (the model won't request tools since none are declared). Desktop
+   * local-hands (2c) + a future restricted browser tool executor will drive the
+   * /tool-result round-trips — the seam (resumeWithToolResults + the route) is in
+   * place server-side.
+   *
+   * The caller passes:
+   *   { kitId, prompt, model?, sessionId?, onEvent?, onToken?, signal? }
+   * and gets back { sessionId, text, usage?, stopReason }. Pass the returned
+   * `sessionId` on the next call to continue the same conversation; omit it (or
+   * call endAgentKitSession) to start/clean up.
+   */
+  async runAgentKitWithAi(input: Record<string, unknown>): Promise<RunAgentKitResult> {
+    const kitId = typeof input.kitId === "string" ? input.kitId : (input.rootPath as string | undefined);
+    const prompt = typeof input.prompt === "string" ? input.prompt : (input.userInput as string | undefined);
+    if (!kitId) throw new Error("runAgentKitWithAi requires a kitId.");
+    if (typeof prompt !== "string" || prompt.length === 0) {
+      throw new Error("runAgentKitWithAi requires a non-empty prompt.");
+    }
+    const model = typeof input.model === "string" ? input.model : undefined;
+    const onEvent = input.onEvent as ((ev: GatewayStreamEvent) => void) | undefined;
+    const onToken = input.onToken as ((delta: string) => void) | undefined;
+    const signal = input.signal as AbortSignal | undefined;
+
+    // 1. Reuse an existing session or create one for this kit.
+    let sessionId = typeof input.sessionId === "string" ? input.sessionId : undefined;
+    if (!sessionId) {
+      const created = await this.json<{ sessionId: string }>("/api/gateway/sessions", {
+        method: "POST",
+        body: JSON.stringify({ kitId, billing: "managed", ...(model ? { model } : {}) })
+      });
+      sessionId = created.sessionId;
+    }
+
+    // 2. Run a turn and consume the SSE stream.
+    const res = await this.fetchImpl(this.url(`/api/gateway/sessions/${encodeURIComponent(sessionId)}/turn`), {
+      method: "POST",
+      credentials: "include",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userInput: prompt, ...(model ? { model } : {}) }),
+      ...(signal ? { signal } : {})
+    });
+
+    if (!res.ok) {
+      // Pre-stream error (e.g. 402 insufficient-credits) arrives as JSON, not SSE.
+      const text = await res.text().catch(() => "");
+      let body: unknown;
+      try {
+        body = text ? JSON.parse(text) : undefined;
+      } catch {
+        body = undefined;
+      }
+      const message =
+        body && typeof body === "object" && "message" in body
+          ? String((body as { message: unknown }).message)
+          : `Turn failed (${res.status})`;
+      throw new HttpError(res.status, message, body);
+    }
+
+    let text = "";
+    let usage: GatewayUsage | undefined;
+    let stopReason = "end_turn";
+    let streamError: string | undefined;
+
+    await consumeSse(res, (ev) => {
+      switch (ev.type) {
+        case "text":
+          text += ev.delta;
+          onToken?.(ev.delta);
+          onEvent?.(ev);
+          break;
+        case "usage":
+          usage = { input: ev.input, output: ev.output, cached: ev.cached };
+          onEvent?.(ev);
+          break;
+        case "done":
+          stopReason = ev.stopReason;
+          onEvent?.(ev);
+          break;
+        case "error":
+          streamError = ev.message;
+          onEvent?.(ev);
+          break;
+        case "tool_use":
+          // Ignored: no tools declared this pass. See method doc — desktop
+          // local-hands (2c) / a future browser tool executor handle these.
+          onEvent?.(ev);
+          break;
+      }
+    });
+
+    if (streamError) throw new Error(streamError);
+    return { sessionId, text, usage, stopReason };
+  }
+
+  /** End a gateway session (cleanup on unmount/end). Fire-and-forget; ignores errors. */
+  async endAgentKitSession(sessionId: string): Promise<void> {
+    if (!sessionId) return;
+    await this.fetchImpl(this.url(`/api/gateway/sessions/${encodeURIComponent(sessionId)}`), {
+      method: "DELETE",
+      credentials: "include"
+    }).catch(() => {
+      /* best-effort cleanup */
+    });
   }
 
   // ===========================================================================
@@ -617,4 +729,78 @@ function parseFileName(contentDisposition: string | null): string {
   if (!contentDisposition) return "download";
   const match = /filename="?([^"]+)"?/.exec(contentDisposition);
   return match?.[1] ?? "download";
+}
+
+// ---------------------------------------------------------------------------
+// Gateway streaming (runAgentKitWithAi)
+// ---------------------------------------------------------------------------
+
+/** Token usage reported by the gateway over the stream. */
+export type GatewayUsage = { input: number; output: number; cached: number };
+
+/**
+ * The normalized StreamEvent union the gateway emits over SSE. Mirrors
+ * @agentkitforge/gateway-core's `StreamEvent` but declared locally so this
+ * browser module never imports the server package.
+ */
+export type GatewayStreamEvent =
+  | { type: "text"; delta: string }
+  | { type: "tool_use"; toolUseId: string; name: string; inputPartial?: string; inputComplete?: Record<string, unknown> }
+  | { type: "usage"; input: number; output: number; cached: number }
+  | { type: "done"; stopReason: string }
+  | { type: "error"; message: string };
+
+/**
+ * Reads a `text/event-stream` Response body and invokes `onEvent` for each
+ * parsed StreamEvent. Handles chunk boundaries that split SSE frames or JSON
+ * across reads by buffering until a full `\n\n`-delimited frame is available.
+ * Resolves when the stream ends.
+ */
+export async function consumeSse(
+  res: Response,
+  onEvent: (event: GatewayStreamEvent) => void
+): Promise<void> {
+  const body = res.body;
+  if (!body) {
+    // No streaming body (e.g. a test stub returned text) — parse the whole text.
+    const text = await res.text();
+    for (const frame of text.split("\n\n")) emitFrame(frame, onEvent);
+    return;
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // Process all complete frames (separated by a blank line).
+    let sep: number;
+    while ((sep = buffer.indexOf("\n\n")) !== -1) {
+      const frame = buffer.slice(0, sep);
+      buffer = buffer.slice(sep + 2);
+      emitFrame(frame, onEvent);
+    }
+  }
+  // Flush any trailing frame without a terminating blank line.
+  if (buffer.trim()) emitFrame(buffer, onEvent);
+}
+
+/** Parses one SSE frame (its `data:` lines) into a StreamEvent and emits it. */
+function emitFrame(frame: string, onEvent: (event: GatewayStreamEvent) => void): void {
+  const dataLines = frame
+    .split("\n")
+    .filter((l) => l.startsWith("data:"))
+    .map((l) => l.slice(5).replace(/^ /, ""));
+  if (dataLines.length === 0) return;
+  const json = dataLines.join("\n");
+  if (!json || json === "[DONE]") return;
+  try {
+    const parsed = JSON.parse(json) as GatewayStreamEvent;
+    if (parsed && typeof parsed === "object" && typeof (parsed as { type?: unknown }).type === "string") {
+      onEvent(parsed);
+    }
+  } catch {
+    /* ignore malformed frame */
+  }
 }

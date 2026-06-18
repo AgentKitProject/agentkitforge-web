@@ -9,7 +9,8 @@ import type { ForgeClient } from "./types";
 
 export type { ForgeClient } from "./types";
 export * from "./types";
-export { WebForgeClient, NotAvailableOnWebError, HttpError } from "./web-client";
+export { WebForgeClient, NotAvailableOnWebError, HttpError, consumeSse } from "./web-client";
+export type { GatewayStreamEvent, GatewayUsage } from "./web-client";
 
 export function createForgeClient(): ForgeClient {
   return new WebForgeClient();

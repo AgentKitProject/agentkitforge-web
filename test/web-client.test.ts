@@ -99,7 +99,10 @@ describe("WebForgeClient endpoint mapping", () => {
   it("desktop-only seams throw NotAvailableOnWebError", async () => {
     const { client } = makeClient(() => ({ body: {} }));
     expect(() => client.addKitToLibrary()).toThrow(NotAvailableOnWebError);
-    await expect(async () => client.runAgentKitWithAi()).rejects.toBeInstanceOf(NotAvailableOnWebError);
+    // runAgentKitWithAi is now IMPLEMENTED on web (gateway streaming, Phase 2b);
+    // it validates its input rather than throwing NotAvailableOnWebError. See
+    // test/web-client-sse.test.ts for its streaming behavior.
+    await expect(client.runAgentKitWithAi({})).rejects.toThrow(/requires a kitId/);
   });
 
   it("updater + openFolder degrade quietly on web", async () => {

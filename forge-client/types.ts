@@ -225,6 +225,12 @@ export interface ForgeClient {
     inputValues: Record<string, unknown>;
   }): Promise<PreparedPromptRenderResult>;
   runAgentKitWithAi(input: Record<string, unknown>): Promise<RunAgentKitResult>;
+  /**
+   * End a gateway streaming session (cleanup on unmount/end). Optional: the
+   * desktop client manages session lifetime differently; the web client
+   * implements it to DELETE the gateway session. Fire-and-forget.
+   */
+  endAgentKitSession?(sessionId: string): Promise<void>;
 
   // --- market submit -------------------------------------------------------
   submitHostedMarketKit(input: SubmitHostedMarketKitInput): Promise<SubmitHostedMarketKitResult>;
