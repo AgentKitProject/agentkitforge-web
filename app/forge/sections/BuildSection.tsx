@@ -1,10 +1,94 @@
 "use client";
 
-import { useRef, useState } from "react";
-import type { Forge, MyKitEntry, Notify } from "./shared";
+import { useEffect, useRef, useState } from "react";
+import type { Forge, MyKitEntry, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
 import { HttpError } from "@/forge-client";
 import { CreditsPanel, InsufficientCreditsBanner } from "./CreditsPanel";
+
+// ---------------------------------------------------------------------------
+// Managed model selection (GAP 2)
+//
+// When a user has NO BYO provider configured, AI turns run on managed prepaid
+// credits and the user couldn't previously pick the model. This hook detects
+// managed mode and exposes the managed model catalog + the chosen id, which is
+// passed through generate/revise as `model` → runManagedTurn. BYO mode keeps
+// using the provider's own model selection and ignores this entirely.
+// ---------------------------------------------------------------------------
+type ManagedModel = { id: string; label: string; tier: "cheaper" | "standard" | "premium" };
+
+const TIER_HINT: Record<ManagedModel["tier"], string> = {
+  cheaper: "cheaper",
+  standard: "standard",
+  premium: "premium"
+};
+
+function useManagedModel() {
+  // managed === user has no BYO provider configured. `undefined` while loading.
+  const [managed, setManaged] = useState<boolean | undefined>(undefined);
+  const [models, setModels] = useState<ManagedModel[]>([]);
+  const [model, setModel] = useState<string>("");
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const provRes = await fetch("/api/settings/ai-providers", { credentials: "include" }).then((r) => r.json());
+        const providers = (provRes as { providers?: PublicProvider[] }).providers ?? [];
+        const isManaged = providers.length === 0;
+        if (!live) return;
+        setManaged(isManaged);
+        if (isManaged) {
+          const m = await fetch("/api/managed/models", { credentials: "include" }).then((r) => r.json());
+          const list = (m as { models?: ManagedModel[]; defaultModel?: string }).models ?? [];
+          if (!live) return;
+          setModels(list);
+          setModel((m as { defaultModel?: string }).defaultModel ?? list[1]?.id ?? list[0]?.id ?? "");
+        }
+      } catch {
+        if (live) setManaged(false); // fail open to BYO/provider-driven path
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  // Only send a model when on managed mode (BYO uses the provider's own model).
+  const modelForRequest = managed ? model || undefined : undefined;
+  return { managed, models, model, setModel, modelForRequest };
+}
+
+function ManagedModelSelector({
+  managed,
+  models,
+  model,
+  setModel
+}: {
+  managed: boolean | undefined;
+  models: ManagedModel[];
+  model: string;
+  setModel: (id: string) => void;
+}) {
+  if (!managed || models.length === 0) return null;
+  return (
+    <div className="field" style={{ marginTop: 12 }}>
+      <label>
+        Managed AI model{" "}
+        <span style={{ fontWeight: 400, color: "var(--color-text-secondary)", fontSize: "0.88em" }}>
+          (billed to prepaid credits)
+        </span>
+      </label>
+      <select value={model} onChange={(e) => setModel(e.target.value)}>
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label} — {TIER_HINT[m.tier]}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
 
 type InsufficientCredits = {
   message: string;
@@ -175,6 +259,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
   const [changeRequest, setChangeRequest] = useState("");
   const [exDocs, setExDocs] = useState<ExDocSummary[]>([]);
   const [credits, setCredits] = useState<InsufficientCredits | null>(null);
+  const managed = useManagedModel();
 
   const run = async (fn: () => Promise<{ draftJson?: unknown; session?: unknown }>, ok: string) => {
     setBusy(true);
@@ -199,6 +284,9 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
   const generate = () => {
     const input: Record<string, unknown> = { userRequest: prompt };
     if (exDocs.length > 0) input.exampleDocuments = exDocs;
+    // Ask the AI to include prepared prompts (parity with the desktop builder).
+    input.requestedSections = ["basics", "skills", "preparedPrompts", "policies"];
+    if (managed.modelForRequest) input.model = managed.modelForRequest;
     return run(
       () => forge.generateAgentKitDraftWithAi(input as never) as never,
       "Draft generated."
@@ -222,6 +310,13 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
           onRemove={(id) => setExDocs((prev) => prev.filter((d) => d.id !== id))}
         />
 
+        <ManagedModelSelector
+          managed={managed.managed}
+          models={managed.models}
+          model={managed.model}
+          setModel={managed.setModel}
+        />
+
         <button className="primary-button" style={{ marginTop: 12 }} disabled={!prompt.trim() || busy} onClick={() => void generate()}>
           {busy ? "Working…" : "Generate draft"}
         </button>
@@ -241,7 +336,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
               <input value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for variance analysis" />
             </div>
             <div className="button-row">
-              <button className="secondary-button" disabled={!changeRequest.trim() || busy} onClick={() => void run(() => forge.reviseAgentKitDraftWithAi({ session, changeRequest } as never) as never, "Draft revised.").then(() => setChangeRequest(""))}>
+              <button className="secondary-button" disabled={!changeRequest.trim() || busy} onClick={() => void run(() => forge.reviseAgentKitDraftWithAi({ session, changeRequest, ...(managed.modelForRequest ? { model: managed.modelForRequest } : {}) } as never) as never, "Draft revised.").then(() => setChangeRequest(""))}>
                 Revise
               </button>
               <button
@@ -295,12 +390,46 @@ type GuidedPolicy = {
   text: string;
 };
 
+// A prepared-prompt input, matching core's preparedPromptInputSchema. `choices`
+// is edited as a newline string in the form and split on save.
+type GuidedPromptInputType =
+  | "short-text"
+  | "long-text"
+  | "choice"
+  | "multi-choice"
+  | "date"
+  | "number"
+  | "boolean";
+
+type GuidedPromptInput = {
+  id: string;
+  label: string;
+  type: GuidedPromptInputType;
+  required: boolean;
+  placeholder?: string;
+  description?: string;
+  choices?: string; // newline-separated in the form
+  includeInPrompt: boolean;
+};
+
 type GuidedPromptDef = {
   id: string;
   name: string;
   description: string;
   template: string;
+  inputs: GuidedPromptInput[];
+  outputMode?: "text" | "markdown" | "document";
 };
+
+const PROMPT_INPUT_TYPES: GuidedPromptInputType[] = [
+  "short-text",
+  "long-text",
+  "choice",
+  "multi-choice",
+  "date",
+  "number",
+  "boolean"
+];
 
 type GuidedForm = {
   kitId: string;
@@ -336,7 +465,14 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
   const [busy, setBusy] = useState(false);
   const [newSkill, setNewSkill] = useState<GuidedSkill>({ id: "", name: "", description: "" });
   const [newPolicy, setNewPolicy] = useState<GuidedPolicy>({ id: "", text: "" });
-  const [newPrompt, setNewPrompt] = useState<GuidedPromptDef>({ id: "", name: "", description: "", template: "" });
+  const [newPrompt, setNewPrompt] = useState<GuidedPromptDef>({ id: "", name: "", description: "", template: "", inputs: [] });
+  const [newPromptInput, setNewPromptInput] = useState<GuidedPromptInput>({
+    id: "",
+    label: "",
+    type: "short-text",
+    required: false,
+    includeInPrompt: true
+  });
 
   const stepIdx = STEPS.findIndex((s) => s.id === step);
 
@@ -355,10 +491,18 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
     setNewPolicy({ id: "", text: "" });
   };
 
+  const addPromptInput = () => {
+    const id = newPromptInput.id.trim() || newPromptInput.label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+    if (!id || !newPromptInput.label.trim()) return;
+    setNewPrompt((p) => ({ ...p, inputs: [...p.inputs, { ...newPromptInput, id }] }));
+    setNewPromptInput({ id: "", label: "", type: "short-text", required: false, includeInPrompt: true });
+  };
+
   const addPrompt = () => {
     if (!newPrompt.id.trim() || !newPrompt.name.trim()) return;
     setForm((f) => ({ ...f, prompts: [...f.prompts, { ...newPrompt }] }));
-    setNewPrompt({ id: "", name: "", description: "", template: "" });
+    setNewPrompt({ id: "", name: "", description: "", template: "", inputs: [] });
+    setNewPromptInput({ id: "", label: "", type: "short-text", required: false, includeInPrompt: true });
   };
 
   const buildDraft = () => {
@@ -374,7 +518,24 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
       id: p.id,
       name: p.name,
       description: p.description,
-      template: p.template || `# ${p.name}\n\n{{context}}`
+      template: p.template || `# ${p.name}\n\n{{context}}`,
+      inputs: p.inputs.map((inp) => {
+        const choices =
+          (inp.type === "choice" || inp.type === "multi-choice") && inp.choices
+            ? inp.choices.split("\n").map((c) => c.trim()).filter(Boolean)
+            : undefined;
+        return {
+          id: inp.id,
+          label: inp.label,
+          type: inp.type,
+          required: inp.required,
+          includeInPrompt: inp.includeInPrompt,
+          ...(inp.placeholder?.trim() ? { placeholder: inp.placeholder.trim() } : {}),
+          ...(inp.description?.trim() ? { description: inp.description.trim() } : {}),
+          ...(choices && choices.length ? { choices } : {})
+        };
+      }),
+      ...(p.outputMode ? { outputMode: p.outputMode } : {})
     }));
     const policies =
       form.policies.length > 0
@@ -499,6 +660,11 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
               <div key={p.id} className="provider-card" style={{ marginBottom: 8 }}>
                 <strong>{p.name}</strong> <span className="inline-code">{p.id}</span>
                 <p className="form-copy" style={{ margin: "2px 0" }}>{p.description}</p>
+                {p.inputs.length > 0 && (
+                  <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>
+                    Inputs: {p.inputs.map((inp) => `${inp.label}${inp.required ? "*" : ""} (${inp.type})`).join(", ")}
+                  </p>
+                )}
                 <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, prompts: f.prompts.filter((_, j) => j !== i) }))}>Remove</button>
               </div>
             ))}
@@ -506,6 +672,52 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
             <div className="field"><label>Prompt name</label><input value={newPrompt.name} onChange={(e) => setNewPrompt((p) => ({ ...p, name: e.target.value }))} placeholder="Run Analysis" /></div>
             <div className="field"><label>Description</label><input value={newPrompt.description} onChange={(e) => setNewPrompt((p) => ({ ...p, description: e.target.value }))} /></div>
             <div className="field"><label>Template (use {"{{variable}}"} for inputs)</label><textarea value={newPrompt.template} onChange={(e) => setNewPrompt((p) => ({ ...p, template: e.target.value }))} style={{ minHeight: 80, fontFamily: "var(--mono, monospace)" }} placeholder={"Analyze the following report:\n\n{{report}}\n\nFocus on: {{focus_area}}"} /></div>
+            <div className="field">
+              <label>Output mode (optional)</label>
+              <select value={newPrompt.outputMode ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, outputMode: (e.target.value || undefined) as GuidedPromptDef["outputMode"] }))}>
+                <option value="">default</option>
+                <option value="text">text</option>
+                <option value="markdown">markdown</option>
+                <option value="document">document</option>
+              </select>
+            </div>
+
+            {/* Typed inputs for this prompt (parity with desktop prepared prompts) */}
+            <div className="provider-card" style={{ marginTop: 4, marginBottom: 8 }}>
+              <p style={{ fontWeight: 600, margin: "0 0 6px", fontSize: "0.9em" }}>Inputs for this prompt ({newPrompt.inputs.length})</p>
+              <p className="form-copy" style={{ marginTop: 0, fontSize: "0.84em" }}>
+                Each input becomes a {"{{field}}"} the user fills in when running the prompt. The input ID should match the {"{{variable}}"} name in your template.
+              </p>
+              {newPrompt.inputs.map((inp, j) => (
+                <div key={inp.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span className="inline-code" style={{ fontSize: "0.82em" }}>{inp.id}</span>
+                  <span style={{ flex: 1, fontSize: "0.85em" }}>{inp.label} <span style={{ color: "var(--color-text-secondary)" }}>({inp.type}{inp.required ? ", required" : ""}{inp.includeInPrompt ? "" : ", collected only"})</span></span>
+                  <button className="danger-button" style={{ fontSize: "0.76em", padding: "2px 8px" }} onClick={() => setNewPrompt((p) => ({ ...p, inputs: p.inputs.filter((_, k) => k !== j) }))}>Remove</button>
+                </div>
+              ))}
+              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Input label</label><input value={newPromptInput.label} onChange={(e) => setNewPromptInput((s) => ({ ...s, label: e.target.value }))} placeholder="Report text" /></div>
+              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Input ID (matches {"{{variable}}"}; auto from label if blank)</label><input value={newPromptInput.id} onChange={(e) => setNewPromptInput((s) => ({ ...s, id: e.target.value }))} placeholder="report" /></div>
+              <div className="field" style={{ marginBottom: 6 }}>
+                <label style={{ fontSize: "0.85em" }}>Type</label>
+                <select value={newPromptInput.type} onChange={(e) => setNewPromptInput((s) => ({ ...s, type: e.target.value as GuidedPromptInputType }))}>
+                  {PROMPT_INPUT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              {(newPromptInput.type === "choice" || newPromptInput.type === "multi-choice") && (
+                <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Choices (one per line)</label><textarea value={newPromptInput.choices ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, choices: e.target.value }))} style={{ minHeight: 56 }} placeholder={"low\nmedium\nhigh"} /></div>
+              )}
+              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Placeholder / help (optional)</label><input value={newPromptInput.placeholder ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, placeholder: e.target.value }))} /></div>
+              <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: "0.85em" }}>
+                  <input type="checkbox" checked={newPromptInput.required} onChange={(e) => setNewPromptInput((s) => ({ ...s, required: e.target.checked }))} /> Required
+                </label>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: "0.85em" }}>
+                  <input type="checkbox" checked={newPromptInput.includeInPrompt} onChange={(e) => setNewPromptInput((s) => ({ ...s, includeInPrompt: e.target.checked }))} /> Include in prompt
+                </label>
+              </div>
+              <button className="secondary-button" style={{ fontSize: "0.82em" }} disabled={!newPromptInput.label.trim()} onClick={addPromptInput}>+ Add input</button>
+            </div>
+
             <div className="button-row">
               <button className="secondary-button" disabled={!newPrompt.id.trim() || !newPrompt.name.trim()} onClick={addPrompt}>+ Add prompt</button>
               <button className="primary-button" onClick={() => setStep("review")}>Next: Review →</button>
@@ -567,6 +779,7 @@ function EditWithAi({
   const [session, setSession] = useState<unknown>(null);
   const [changeRequest, setChangeRequest] = useState("");
   const [busy, setBusy] = useState(false);
+  const managed = useManagedModel();
 
   const loadDraft = async (id: string) => {
     setBusy(true);
@@ -586,7 +799,7 @@ function EditWithAi({
     if (!changeRequest.trim() || !draft) return;
     setBusy(true);
     try {
-      const r = await forge.reviseAgentKitDraftWithAi({ session, changeRequest } as never) as { draftJson?: unknown; session?: unknown };
+      const r = await forge.reviseAgentKitDraftWithAi({ session, changeRequest, ...(managed.modelForRequest ? { model: managed.modelForRequest } : {}) } as never) as { draftJson?: unknown; session?: unknown };
       setDraft(r.draftJson ?? draft);
       setSession(r.session ?? session);
       setChangeRequest("");
@@ -631,6 +844,12 @@ function EditWithAi({
         </button>
         {draft != null && (
           <>
+            <ManagedModelSelector
+              managed={managed.managed}
+              models={managed.models}
+              model={managed.model}
+              setModel={managed.setModel}
+            />
             <div className="field" style={{ marginTop: 12 }}>
               <label>What should change?</label>
               <textarea value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for executive summary generation, improve the description" />

@@ -12,11 +12,9 @@
 import { loadCore } from "@/server/core/load-core";
 import { getUserSettingsStore } from "@/server/store/user-settings";
 import { runManagedChat } from "@/server/core/gateway";
+import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
 import type { ChatRequest } from "@agentkitforge/gateway-core";
 
-// Default model used for MANAGED (platform-credit) turns when the caller does
-// not request one. Kept current with Anthropic's recommended Sonnet id.
-const MANAGED_DEFAULT_MODEL = "claude-sonnet-4-5";
 const MANAGED_MAX_TOKENS = 4000;
 
 // Billing mode selection: a user with ANY configured BYO provider uses BYO
@@ -102,8 +100,11 @@ async function resolveBilling(
     if (!model) throw new Error(`${provider.name} model is required.`);
     return { mode: "byo", provider, model };
   }
-  // No BYO provider configured → managed prepaid credits.
-  return { mode: "managed", model: (inputModel?.trim() || MANAGED_DEFAULT_MODEL) };
+  // No BYO provider configured → managed prepaid credits. Only honor a
+  // requested model if it is one we actually offer + price; otherwise fall back
+  // to the balanced default (never bill against an unknown/arbitrary id).
+  const requested = inputModel?.trim();
+  return { mode: "managed", model: isManagedModel(requested) ? requested! : MANAGED_DEFAULT_MODEL };
 }
 
 // Build the gateway ChatRequest for a draft turn from the same prompt parts the
