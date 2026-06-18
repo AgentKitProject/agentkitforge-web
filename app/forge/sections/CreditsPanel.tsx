@@ -5,11 +5,21 @@
 //
 // The dev-grant button calls POST /api/credits/dev-grant, which is gated to an
 // admin allowlist server-side (ADMIN_EMAILS); for non-admins it simply returns
-// 403 and we surface the message. It is a pre-Stripe testing affordance — the
-// real "top up" (Stripe) is Gateway 1b-ii.
-import { useCallback, useEffect, useState } from "react";
+// 403 and we surface the message. It is a pre-Stripe testing affordance.
+//
+// The real "top up" (Stripe) was added in Gateway 1b-ii: preset amount buttons
+// call POST /api/credits/topup → Stripe Checkout → webhook credits the ledger.
+// Returns are handled via ?topup=success|cancelled query params.
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Notify } from "./shared";
 import { errMsg } from "./shared";
+import { TOP_UP_PRESETS_CENTS } from "@/lib/topup-presets";
+
+/** UI display labels for preset top-up amounts. */
+const TOP_UP_PRESETS: { cents: number; label: string }[] = TOP_UP_PRESETS_CENTS.map((cents) => ({
+  cents,
+  label: `$${(cents / 100).toFixed(0)}`
+}));
 
 export type Credits = { balanceCents: number; currency: string };
 
@@ -34,7 +44,9 @@ export function CreditsPanel({
 }) {
   const [credits, setCredits] = useState<Credits | null>(null);
   const [busy, setBusy] = useState(false);
+  const [topupBusy, setTopupBusy] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const didHandleReturn = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -48,6 +60,28 @@ export function CreditsPanel({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Handle ?topup=success|cancelled return from Stripe Checkout.
+  useEffect(() => {
+    if (didHandleReturn.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const topup = params.get("topup");
+    if (topup === "success") {
+      didHandleReturn.current = true;
+      notify("Top-up successful! Your credits have been applied.");
+      void load();
+      // Clean the query param without a full reload.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("topup");
+      window.history.replaceState(null, "", url.toString());
+    } else if (topup === "cancelled") {
+      didHandleReturn.current = true;
+      notify("Top-up cancelled.");
+      const url = new URL(window.location.href);
+      url.searchParams.delete("topup");
+      window.history.replaceState(null, "", url.toString());
+    }
+  }, [load, notify]);
 
   const devGrant = async () => {
     setBusy(true);
@@ -69,6 +103,36 @@ export function CreditsPanel({
     }
   };
 
+  const startTopup = async (amountCents: number) => {
+    setTopupBusy(amountCents);
+    try {
+      const res = await fetch("/api/credits/topup", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents })
+      });
+      const data = (await res.json()) as { url?: string; message?: string };
+      if (!res.ok) {
+        if (res.status === 503) {
+          notify("Stripe payments are not configured on this instance.", true);
+        } else {
+          notify(data.message ?? `Top-up failed (${res.status})`, true);
+        }
+        return;
+      }
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setTopupBusy(null);
+    }
+  };
+
+  const anyBusy = busy || topupBusy !== null;
+
   return (
     <div className="provider-card" style={{ padding: "10px 12px", marginBottom: 12 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -80,10 +144,27 @@ export function CreditsPanel({
           Managed AI uses prepaid credits (used when you have no AI provider configured).
         </span>
         {showDevGrant && (
-          <button className="secondary-button" disabled={busy} onClick={() => void devGrant()}>
+          <button className="secondary-button" disabled={anyBusy} onClick={() => void devGrant()}>
             {busy ? "…" : "+ $5 (dev/admin)"}
           </button>
         )}
+      </div>
+      <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: "0.85em", color: "var(--color-text-secondary)" }}>Top up:</span>
+        {TOP_UP_PRESETS.map(({ cents, label }) => (
+          <button
+            key={cents}
+            className="secondary-button"
+            disabled={anyBusy}
+            onClick={() => void startTopup(cents)}
+            title={`Add ${label} of prepaid credits`}
+          >
+            {topupBusy === cents ? "…" : label}
+          </button>
+        ))}
+        <span style={{ fontSize: "0.78em", color: "var(--color-text-secondary)" }}>
+          Credits are non-refundable.
+        </span>
       </div>
       {error && <p className="inline-warning" style={{ marginTop: 6 }}>{error}</p>}
     </div>
@@ -92,19 +173,51 @@ export function CreditsPanel({
 
 /**
  * Inline banner for a 402 insufficient-credits response from a draft route.
- * Renders the server message + a disabled "top up — coming soon" placeholder.
+ * Renders the server message + preset top-up buttons that redirect to Stripe.
  */
 export function InsufficientCreditsBanner({
   message,
   requiredCents,
   balanceCents,
-  currency = "USD"
+  currency = "USD",
+  notify
 }: {
   message: string;
   requiredCents?: number;
   balanceCents?: number;
   currency?: string;
+  notify?: Notify;
 }) {
+  const [topupBusy, setTopupBusy] = useState<number | null>(null);
+
+  const startTopup = async (amountCents: number) => {
+    setTopupBusy(amountCents);
+    try {
+      const res = await fetch("/api/credits/topup", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ amountCents })
+      });
+      const data = (await res.json()) as { url?: string; message?: string };
+      if (!res.ok) {
+        const msg =
+          res.status === 503
+            ? "Stripe payments are not configured on this instance."
+            : (data.message ?? `Top-up failed (${res.status})`);
+        notify?.(msg, true);
+        return;
+      }
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    } catch (e) {
+      notify?.(errMsg(e), true);
+    } finally {
+      setTopupBusy(null);
+    }
+  };
+
   return (
     <div className="inline-warning" style={{ marginTop: 10, padding: "8px 10px" }}>
       <strong>Out of credits.</strong> {message}
@@ -114,10 +227,22 @@ export function InsufficientCreditsBanner({
           {typeof requiredCents === "number" && <> · Needed: ~{formatCents(requiredCents, currency)}</>}
         </div>
       )}
-      <div style={{ marginTop: 6 }}>
-        <button className="primary-button" disabled title="Stripe top-up is coming soon (Gateway 1b-ii).">
-          Top up — coming soon
-        </button>
+      <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: "0.85em" }}>Top up:</span>
+        {TOP_UP_PRESETS.map(({ cents, label }) => (
+          <button
+            key={cents}
+            className="primary-button"
+            disabled={topupBusy !== null}
+            onClick={() => void startTopup(cents)}
+            title={`Add ${label} of prepaid credits`}
+          >
+            {topupBusy === cents ? "…" : label}
+          </button>
+        ))}
+      </div>
+      <div style={{ marginTop: 4, fontSize: "0.78em", color: "var(--color-text-secondary)" }}>
+        Credits are non-refundable.
       </div>
     </div>
   );

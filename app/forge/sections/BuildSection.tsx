@@ -231,6 +231,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
             requiredCents={credits.requiredCents}
             balanceCents={credits.balanceCents}
             currency={credits.currency}
+            notify={notify}
           />
         )}
         {draftJson != null && (

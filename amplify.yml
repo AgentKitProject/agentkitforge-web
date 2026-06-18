@@ -50,6 +50,12 @@ frontend:
         - 'printf "GATEWAY_SESSIONS_TABLE=%s\n" "$GATEWAY_SESSIONS_TABLE" >> .env.production'
         - 'printf "ANTHROPIC_API_KEY=%s\n" "$ANTHROPIC_API_KEY" >> .env.production'
         - 'printf "ADMIN_EMAILS=%s\n" "$ADMIN_EMAILS" >> .env.production'
+        # Stripe prepaid credit top-up (Gateway 1b-ii). Both vars are optional —
+        # the checkout and webhook routes return 503 "payments not configured"
+        # when either is absent. Set in Amplify env once keys are provisioned;
+        # never hardcode values here.
+        - 'printf "STRIPE_SECRET_KEY=%s\n" "$STRIPE_SECRET_KEY" >> .env.production'
+        - 'printf "STRIPE_WEBHOOK_SECRET=%s\n" "$STRIPE_WEBHOOK_SECRET" >> .env.production'
         - 'npm ci'
     build:
       commands:
