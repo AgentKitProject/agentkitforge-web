@@ -152,8 +152,23 @@ export function ImportSection({
 // ---------------------------------------------------------------------------
 // Org kits panel
 // ---------------------------------------------------------------------------
+
+type OrgKitEntry = {
+  kitId: string;
+  slug: string;
+  name?: string;
+  summary?: string;
+  visibility?: string;
+  currentVersion?: number;
+  publisherId?: string;
+};
+
 function OrgKitsPanel({
-  // forge, onDone, busy, setBusy not yet used — per-org kit listing is Phase 2
+  forge,
+  notify,
+  onDone,
+  busy,
+  setBusy
 }: {
   forge: Forge;
   notify: Notify;
@@ -162,8 +177,12 @@ function OrgKitsPanel({
   setBusy: (b: boolean) => void;
 }) {
   const [orgs, setOrgs] = useState<OrgEntry[]>([]);
+  const [selectedOrg, setSelectedOrg] = useState<OrgEntry | null>(null);
+  const [kits, setKits] = useState<OrgKitEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [kitsLoading, setKitsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [kitsError, setKitsError] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -178,6 +197,50 @@ function OrgKitsPanel({
       .finally(() => setLoading(false));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadOrgKits = (org: OrgEntry) => {
+    setSelectedOrg(org);
+    setKits([]);
+    setKitsError(null);
+    setKitsLoading(true);
+    fetch(`/api/market/orgs/${encodeURIComponent(org.id)}/kits`, { credentials: "include" })
+      .then(async (res) => {
+        const data = (await res.json()) as { items?: OrgKitEntry[]; error?: string };
+        if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
+        setKits(data.items ?? []);
+      })
+      .catch((e: unknown) => setKitsError(errMsg(e)))
+      .finally(() => setKitsLoading(false));
+  };
+
+  const importKit = async (slug: string) => {
+    setBusy(true);
+    try {
+      const result = await forge.importHostedMarketKit({ slug, marketBaseUrl: "", validationProfile: "local-valid" });
+      notify(`Imported "${slug}".`);
+      const kitId = (result && typeof result === "object" && "kitId" in result) ? String((result as { kitId: string }).kitId) : undefined;
+      onDone(kitId);
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const favoriteKit = async (slug: string) => {
+    try {
+      const r = await fetch("/api/favorites", {
+        method: "POST",
+        credentials: "include",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ marketSlug: slug })
+      });
+      if (!r.ok) throw new Error(((await r.json()) as { error?: string }).error ?? "Failed");
+      notify(`Favorited "${slug}".`);
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
 
   if (loading) {
     return <p className="form-copy">Loading your organizations…</p>;
@@ -197,7 +260,7 @@ function OrgKitsPanel({
     return (
       <div className="form-panel">
         <h2>Org kits</h2>
-        <p className="form-copy">You are not a member of any AgentKitMarket organization. Organizations and private catalogs are part of <strong>Market Phase 2</strong>, which is currently in progress.</p>
+        <p className="form-copy">You are not a member of any AgentKitMarket organization.</p>
         <p className="form-copy">Once your organization is on AgentKitMarket, org-owned kits will be available to import here. Public kits from the Market catalog are available in the <strong>Browse Market</strong> tab.</p>
       </div>
     );
@@ -205,11 +268,9 @@ function OrgKitsPanel({
 
   return (
     <div style={{ width: "100%" }}>
-      <h2>Your organizations</h2>
+      <h2>Org kits</h2>
       <p className="form-copy">
-        You belong to {orgs.length} organization{orgs.length !== 1 ? "s" : ""} on AgentKitMarket.
-        Per-org private kit catalogs are part of <strong>Market Phase 2</strong> and are not yet available.
-        You can import kits by slug from the <strong>From Market</strong> tab, or browse the public catalog.
+        Select an organization to browse its kits, including private ones you have access to.
       </p>
 
       <div className="kit-list">
@@ -226,6 +287,13 @@ function OrgKitsPanel({
               </div>
             </div>
             <div className="button-row">
+              <button
+                className="secondary-button"
+                onClick={() => loadOrgKits(org)}
+                disabled={kitsLoading && selectedOrg?.id === org.id}
+              >
+                {kitsLoading && selectedOrg?.id === org.id ? "Loading…" : "Browse kits"}
+              </button>
               <a
                 className="secondary-button"
                 href={`https://market.agentkitproject.com/orgs/${encodeURIComponent(org.id)}`}
@@ -235,14 +303,50 @@ function OrgKitsPanel({
               >
                 View on Market
               </a>
-              <span className="source-badge" style={{ alignSelf: "center", fontSize: "0.78em" }}>Private catalog: coming in Phase 2</span>
             </div>
           </article>
         ))}
       </div>
+
+      {selectedOrg && (
+        <div style={{ marginTop: 24 }}>
+          <h2 style={{ marginBottom: 4 }}>{selectedOrg.name} — kits</h2>
+          {kitsLoading && <p className="form-copy">Loading kits…</p>}
+          {kitsError && <p className="inline-warning">{kitsError}</p>}
+          {!kitsLoading && !kitsError && kits.length === 0 && (
+            <p className="form-copy">This organization has no kits yet.</p>
+          )}
+          {kits.length > 0 && (
+            <div className="kit-list">
+              {kits.map((k) => (
+                <article className="kit-library-card" key={k.kitId}>
+                  <div className="kit-library-main">
+                    <div>
+                      <h2>{k.name ?? k.slug}</h2>
+                      {k.summary && <p>{k.summary}</p>}
+                      <p className="form-copy" style={{ margin: "2px 0" }}>
+                        <span className="inline-code">{k.slug}</span>
+                        {k.currentVersion != null && <span> · v{k.currentVersion}</span>}
+                        {k.visibility === "private" && (
+                          <span className="source-badge" style={{ marginLeft: 6 }}>private</span>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="button-row">
+                    <button className="primary-button" disabled={busy} onClick={() => void importKit(k.slug)}>Import</button>
+                    <button className="secondary-button" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
+                      <StarIcon size={13} /> Favorite
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
-
 }
 
 // ---------------------------------------------------------------------------
