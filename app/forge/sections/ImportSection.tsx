@@ -5,7 +5,7 @@ import { StarIcon } from "../icons";
 import type { Forge, Notify } from "./shared";
 import { errMsg } from "./shared";
 
-type ImportTab = "zip" | "git" | "market" | "browse";
+type ImportTab = "zip" | "git" | "market" | "browse" | "org";
 
 type MarketKitEntry = {
   slug: string;
@@ -16,6 +16,13 @@ type MarketKitEntry = {
   categories?: string[];
   tags?: string[];
   downloadCount?: number;
+};
+
+type OrgEntry = {
+  id: string;
+  name: string;
+  role?: string;
+  memberCount?: number;
 };
 
 export function ImportSection({
@@ -55,7 +62,8 @@ export function ImportSection({
           ["zip", "Upload .agentkit.zip"],
           ["git", "From Git"],
           ["market", "From Market (slug)"],
-          ["browse", "Browse Market"]
+          ["browse", "Browse Market"],
+          ["org", "Org Kits"]
         ] as [ImportTab, string][]).map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={`segment-button ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
             {label}
@@ -133,11 +141,113 @@ export function ImportSection({
         {tab === "browse" && (
           <MarketBrowsePanel forge={forge} notify={notify} onDone={onDone} busy={busy} setBusy={setBusy} />
         )}
+        {tab === "org" && (
+          <OrgKitsPanel forge={forge} notify={notify} onDone={onDone} busy={busy} setBusy={setBusy} />
+        )}
       </div>
     </div>
   );
 }
 
+// ---------------------------------------------------------------------------
+// Org kits panel
+// ---------------------------------------------------------------------------
+function OrgKitsPanel({
+  // forge, onDone, busy, setBusy not yet used — per-org kit listing is Phase 2
+}: {
+  forge: Forge;
+  notify: Notify;
+  onDone: (kitId?: string) => void;
+  busy: boolean;
+  setBusy: (b: boolean) => void;
+}) {
+  const [orgs, setOrgs] = useState<OrgEntry[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    fetch("/api/market/orgs", { credentials: "include" })
+      .then(async (res) => {
+        const data = (await res.json()) as { orgs?: OrgEntry[]; error?: string };
+        if (!res.ok) throw new Error(data.error ?? `Request failed (${res.status})`);
+        setOrgs(data.orgs ?? []);
+      })
+      .catch((e: unknown) => setError(errMsg(e)))
+      .finally(() => setLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loading) {
+    return <p className="form-copy">Loading your organizations…</p>;
+  }
+
+  if (error) {
+    return (
+      <div className="form-panel">
+        <h2>Org kits</h2>
+        <p className="inline-warning">{error}</p>
+        <p className="form-copy">Make sure you are signed in. If the error persists, try signing out and back in.</p>
+      </div>
+    );
+  }
+
+  if (orgs.length === 0) {
+    return (
+      <div className="form-panel">
+        <h2>Org kits</h2>
+        <p className="form-copy">You are not a member of any AgentKitMarket organization. Organizations and private catalogs are part of <strong>Market Phase 2</strong>, which is currently in progress.</p>
+        <p className="form-copy">Once your organization is on AgentKitMarket, org-owned kits will be available to import here. Public kits from the Market catalog are available in the <strong>Browse Market</strong> tab.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ width: "100%" }}>
+      <h2>Your organizations</h2>
+      <p className="form-copy">
+        You belong to {orgs.length} organization{orgs.length !== 1 ? "s" : ""} on AgentKitMarket.
+        Per-org private kit catalogs are part of <strong>Market Phase 2</strong> and are not yet available.
+        You can import kits by slug from the <strong>From Market</strong> tab, or browse the public catalog.
+      </p>
+
+      <div className="kit-list">
+        {orgs.map((org) => (
+          <article className="kit-library-card" key={org.id}>
+            <div className="kit-library-main">
+              <div>
+                <h2>{org.name}</h2>
+                <p className="form-copy" style={{ margin: "2px 0" }}>
+                  <span className="inline-code">{org.id}</span>
+                  {org.role && <span> · {org.role}</span>}
+                  {org.memberCount != null && <span> · {org.memberCount} member{org.memberCount !== 1 ? "s" : ""}</span>}
+                </p>
+              </div>
+            </div>
+            <div className="button-row">
+              <a
+                className="secondary-button"
+                href={`https://market.agentkitproject.com/orgs/${encodeURIComponent(org.id)}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ textDecoration: "none" }}
+              >
+                View on Market
+              </a>
+              <span className="source-badge" style={{ alignSelf: "center", fontSize: "0.78em" }}>Private catalog: coming in Phase 2</span>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+
+}
+
+// ---------------------------------------------------------------------------
+// Browse Market panel
+// ---------------------------------------------------------------------------
 function MarketBrowsePanel({
   forge,
   notify,
@@ -158,29 +268,6 @@ function MarketBrowsePanel({
   const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
   const [hasMore, setHasMore] = useState(false);
 
-  const fetchPage = async (cursor?: string, q?: string) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const params = new URLSearchParams();
-      if (cursor) params.set("cursor", cursor);
-      if (q?.trim()) params.set("q", q.trim());
-      params.set("limit", "24");
-      const res = await fetch(`/api/market/catalog?${params}`, { credentials: "include" });
-      if (!res.ok) throw new Error((await res.json() as { error?: string }).error ?? "Failed to load catalog");
-      const data = await res.json() as { kits?: MarketKitEntry[]; nextCursor?: string };
-      const incoming = data.kits ?? [];
-      setKits(cursor ? (prev) => [...prev, ...incoming] : incoming);
-      setNextCursor(data.nextCursor);
-      setHasMore(!!data.nextCursor);
-    } catch (e) {
-      setError(errMsg(e));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // setKits needs to be callable as function — adjust the load
   const loadPage = async (cursor?: string, q?: string) => {
     setLoading(true);
     setError(null);
@@ -245,9 +332,6 @@ function MarketBrowsePanel({
       notify(errMsg(e), true);
     }
   };
-
-  // Eliminate unused fetchPage warning
-  void fetchPage;
 
   return (
     <div style={{ width: "100%" }}>

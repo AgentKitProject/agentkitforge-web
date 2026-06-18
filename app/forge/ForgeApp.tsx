@@ -17,6 +17,7 @@ import {
   InfoIcon,
   PackageIcon,
   PlayIcon,
+  PlugIcon,
   SettingsIcon,
   SparklesIcon,
   UploadIcon,
@@ -34,6 +35,7 @@ import { KitEditor } from "./sections/KitEditor";
 import { SettingsSection } from "./sections/SettingsSection";
 import { AccountSection } from "./sections/AccountSection";
 import { AboutSection } from "./sections/AboutSection";
+import { InstallTargetsSection } from "./sections/InstallTargetsSection";
 
 type Forge = ReturnType<typeof getForgeClient>;
 type SectionId =
@@ -42,6 +44,7 @@ type SectionId =
   | "use"
   | "import"
   | "package-export"
+  | "install-targets"
   | "market-submit"
   | "settings"
   | "account"
@@ -53,6 +56,7 @@ const NAV: { id: SectionId; label: string; Icon: typeof PackageIcon }[] = [
   { id: "use", label: "Use", Icon: PlayIcon },
   { id: "import", label: "Import", Icon: ImportIcon },
   { id: "package-export", label: "Package / Export", Icon: ExportIcon },
+  { id: "install-targets", label: "Install Targets", Icon: PlugIcon },
   { id: "market-submit", label: "Submit to Market", Icon: UploadIcon },
   { id: "settings", label: "Settings", Icon: SettingsIcon },
   { id: "about", label: "About", Icon: InfoIcon }
@@ -64,6 +68,7 @@ const SECTION_TITLES: Record<SectionId, { eyebrow: string; title: string }> = {
   use: { eyebrow: "Run", title: "Use a Kit" },
   import: { eyebrow: "Bring in", title: "Import a Kit" },
   "package-export": { eyebrow: "Distribute", title: "Package / Export" },
+  "install-targets": { eyebrow: "Deploy", title: "Install Targets" },
   "market-submit": { eyebrow: "Publish", title: "Submit to Market" },
   settings: { eyebrow: "Configure", title: "Settings" },
   account: { eyebrow: "Account", title: "Your AgentKitProject account" },
@@ -247,6 +252,8 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
             <ImportSection forge={forge} notify={notify} onDone={(kitId) => { void refresh().then(() => { setSection("my-kits"); if (kitId) setOpenKitId(kitId); }); }} />
           ) : section === "package-export" ? (
             <PackageExportSection forge={forge} kits={kits} notify={notify} />
+          ) : section === "install-targets" ? (
+            <InstallTargetsSection forge={forge} kits={kits} notify={notify} />
           ) : section === "market-submit" ? (
             <MarketSubmitSection kits={kits} onPick={(id) => setSubmitKitId(id)} />
           ) : section === "settings" ? (

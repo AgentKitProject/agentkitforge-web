@@ -188,9 +188,14 @@ describe("WebForgeClient endpoint mapping", () => {
     expect(res.submissionId).toBe("sub1");
   });
 
-  it("renderAgentKitDraft + summarizeExampleInputDocuments remain desktop-only stubs", async () => {
+  it("renderAgentKitDraft remains desktop-only stub", () => {
     const { client } = makeClient(() => ({ body: {} }));
     expect(() => client.renderAgentKitDraft()).toThrow(NotAvailableOnWebError);
-    expect(() => client.summarizeExampleInputDocuments()).toThrow(NotAvailableOnWebError);
+  });
+
+  it("summarizeExampleInputDocuments returns empty array for no paths (web uses direct upload route)", async () => {
+    const { client } = makeClient(() => ({ body: {} }));
+    const result = await client.summarizeExampleInputDocuments([]);
+    expect(result).toEqual([]);
   });
 });

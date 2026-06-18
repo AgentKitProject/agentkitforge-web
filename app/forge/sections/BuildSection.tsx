@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 
@@ -48,6 +48,99 @@ export function BuildSection({
   );
 }
 
+// ---------------------------------------------------------------------------
+// Example document upload + summarize
+// ---------------------------------------------------------------------------
+type ExDocSummary = {
+  id: string;
+  name: string;
+  filename: string;
+  kind: string;
+  notes?: string;
+};
+
+function ExampleDocsPanel({
+  summaries,
+  onAdd,
+  onRemove
+}: {
+  summaries: ExDocSummary[];
+  onAdd: (s: ExDocSummary) => void;
+  onRemove: (id: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const upload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    setErr(null);
+    try {
+      const form = new FormData();
+      for (const f of Array.from(files)) form.append("file", f);
+      const res = await fetch("/api/drafts/summarize-examples", {
+        method: "POST",
+        credentials: "include",
+        body: form
+      });
+      const data = (await res.json()) as { summaries?: ExDocSummary[]; error?: string };
+      if (!res.ok) throw new Error(data.error ?? `Upload failed (${res.status})`);
+      for (const s of data.summaries ?? []) onAdd(s);
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="field" style={{ marginTop: 12 }}>
+      <label>Example input documents <span style={{ fontWeight: 400, color: "var(--color-text-secondary)", fontSize: "0.88em" }}>(optional)</span></label>
+      <p className="form-copy" style={{ marginBottom: 6 }}>
+        Upload sample .txt / .md / .csv files so the AI can match your expected formatting and terminology.
+        Max 256 KB per file.
+      </p>
+      {summaries.length > 0 && (
+        <div style={{ marginBottom: 8 }}>
+          {summaries.map((s) => (
+            <div key={s.id} className="provider-card" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 4 }}>
+              <span className="source-badge">{s.kind}</span>
+              <span style={{ flex: 1, fontSize: "0.9em" }}>{s.filename}</span>
+              <button
+                className="danger-button"
+                style={{ fontSize: "0.78em", padding: "2px 8px" }}
+                onClick={() => onRemove(s.id)}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="button-row">
+        <button
+          className="secondary-button"
+          disabled={uploading}
+          onClick={() => fileRef.current?.click()}
+        >
+          {uploading ? "Uploading…" : "+ Attach document"}
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".txt,.md,.csv"
+          multiple
+          style={{ display: "none" }}
+          onChange={(e) => void upload(e.target.files)}
+        />
+      </div>
+      {err && <p className="inline-warning" style={{ marginTop: 6 }}>{err}</p>}
+    </div>
+  );
+}
+
 // --- Build with AI -----------------------------------------------------------
 function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; onOpen: (id: string) => void }) {
   const [prompt, setPrompt] = useState("");
@@ -55,6 +148,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
   const [session, setSession] = useState<unknown>(null);
   const [draftJson, setDraftJson] = useState<unknown>(null);
   const [changeRequest, setChangeRequest] = useState("");
+  const [exDocs, setExDocs] = useState<ExDocSummary[]>([]);
 
   const run = async (fn: () => Promise<{ draftJson?: unknown; session?: unknown }>, ok: string) => {
     setBusy(true);
@@ -70,6 +164,15 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
     }
   };
 
+  const generate = () => {
+    const input: Record<string, unknown> = { userRequest: prompt };
+    if (exDocs.length > 0) input.exampleDocuments = exDocs;
+    return run(
+      () => forge.generateAgentKitDraftWithAi(input as never) as never,
+      "Draft generated."
+    );
+  };
+
   return (
     <div className="form-layout">
       <div className="form-panel">
@@ -79,7 +182,14 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
           <label>Describe the kit you want</label>
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies." />
         </div>
-        <button className="primary-button" disabled={!prompt.trim() || busy} onClick={() => void run(() => forge.generateAgentKitDraftWithAi({ userRequest: prompt } as never) as never, "Draft generated.")}>
+
+        <ExampleDocsPanel
+          summaries={exDocs}
+          onAdd={(s) => setExDocs((prev) => [...prev, s])}
+          onRemove={(id) => setExDocs((prev) => prev.filter((d) => d.id !== id))}
+        />
+
+        <button className="primary-button" style={{ marginTop: 12 }} disabled={!prompt.trim() || busy} onClick={() => void generate()}>
           {busy ? "Working…" : "Generate draft"}
         </button>
         {draftJson != null && (
@@ -127,13 +237,20 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
 }
 
 // --- Guided Builder ----------------------------------------------------------
-type GuidedStep = "basics" | "skills" | "prompts" | "review";
+type GuidedStep = "basics" | "skills" | "policies" | "prompts" | "review";
 
 type GuidedSkill = {
   id: string;
   name: string;
   description: string;
   triggers?: string;
+  useWhen?: string;
+  doNotUseWhen?: string;
+};
+
+type GuidedPolicy = {
+  id: string;
+  text: string;
 };
 
 type GuidedPromptDef = {
@@ -150,12 +267,14 @@ type GuidedForm = {
   domain: string;
   targetUsers: string;
   skills: GuidedSkill[];
+  policies: GuidedPolicy[];
   prompts: GuidedPromptDef[];
 };
 
 const STEPS: { id: GuidedStep; label: string; badge?: string }[] = [
   { id: "basics", label: "Basics", badge: "Required" },
   { id: "skills", label: "Skills", badge: "Recommended" },
+  { id: "policies", label: "Policies", badge: "Optional" },
   { id: "prompts", label: "Prompts", badge: "Optional" },
   { id: "review", label: "Review & Create" }
 ];
@@ -169,10 +288,12 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
     domain: "",
     targetUsers: "",
     skills: [],
+    policies: [],
     prompts: []
   });
   const [busy, setBusy] = useState(false);
   const [newSkill, setNewSkill] = useState<GuidedSkill>({ id: "", name: "", description: "" });
+  const [newPolicy, setNewPolicy] = useState<GuidedPolicy>({ id: "", text: "" });
   const [newPrompt, setNewPrompt] = useState<GuidedPromptDef>({ id: "", name: "", description: "", template: "" });
 
   const stepIdx = STEPS.findIndex((s) => s.id === step);
@@ -185,6 +306,13 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
     setNewSkill({ id: "", name: "", description: "" });
   };
 
+  const addPolicy = () => {
+    if (!newPolicy.text.trim()) return;
+    const id = newPolicy.id.trim() || `policy-${Date.now()}`;
+    setForm((f) => ({ ...f, policies: [...f.policies, { id, text: newPolicy.text }] }));
+    setNewPolicy({ id: "", text: "" });
+  };
+
   const addPrompt = () => {
     if (!newPrompt.id.trim() || !newPrompt.name.trim()) return;
     setForm((f) => ({ ...f, prompts: [...f.prompts, { ...newPrompt }] }));
@@ -192,12 +320,13 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
   };
 
   const buildDraft = () => {
-    // Build a minimal agentkit draft from the guided form
     const skills = form.skills.map((s) => ({
       id: s.id,
       name: s.name,
       description: s.description,
-      triggers: s.triggers ? [s.triggers] : undefined
+      triggers: s.triggers ? [s.triggers] : undefined,
+      useWhen: s.useWhen || undefined,
+      doNotUseWhen: s.doNotUseWhen || undefined
     }));
     const preparedPrompts = form.prompts.map((p) => ({
       id: p.id,
@@ -205,6 +334,10 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
       description: p.description,
       template: p.template || `# ${p.name}\n\n{{context}}`
     }));
+    const policies =
+      form.policies.length > 0
+        ? form.policies.map((p) => ({ id: p.id, text: p.text }))
+        : undefined;
     return {
       manifest: {
         id: form.kitId.trim(),
@@ -216,6 +349,7 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
         targetUsers: form.targetUsers.trim() || undefined
       },
       skills,
+      policies,
       preparedPrompts: preparedPrompts.length ? preparedPrompts : undefined,
       files: {}
     };
@@ -273,20 +407,43 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
         {step === "skills" && (
           <>
             <h2>Skills ({form.skills.length} defined)</h2>
-            <p className="form-copy">Skills are discrete capabilities your kit provides. Each skill has a name, description, and optional triggers.</p>
+            <p className="form-copy">Skills are discrete capabilities your kit provides. Each skill has a name, description, and optional triggers. At least one skill is recommended.</p>
             {form.skills.map((s, i) => (
               <div key={s.id} className="provider-card" style={{ marginBottom: 8 }}>
                 <strong>{s.name}</strong> <span className="inline-code">{s.id}</span>
                 <p className="form-copy" style={{ margin: "2px 0" }}>{s.description}</p>
+                {s.triggers && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Triggers: {s.triggers}</p>}
+                {s.useWhen && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Use when: {s.useWhen}</p>}
+                {s.doNotUseWhen && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Do not use when: {s.doNotUseWhen}</p>}
                 <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, skills: f.skills.filter((_, j) => j !== i) }))}>Remove</button>
               </div>
             ))}
             <div className="field"><label>Skill ID</label><input value={newSkill.id} onChange={(e) => setNewSkill((s) => ({ ...s, id: e.target.value }))} placeholder="analyze-report" /></div>
             <div className="field"><label>Skill name</label><input value={newSkill.name} onChange={(e) => setNewSkill((s) => ({ ...s, name: e.target.value }))} placeholder="Analyze Report" /></div>
             <div className="field"><label>Description</label><textarea value={newSkill.description} onChange={(e) => setNewSkill((s) => ({ ...s, description: e.target.value }))} style={{ minHeight: 64 }} /></div>
-            <div className="field"><label>Triggers (optional)</label><input value={newSkill.triggers ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, triggers: e.target.value }))} placeholder="when user asks to analyze…" /></div>
+            <div className="field"><label>Triggers (optional) — natural-language phrases that invoke this skill</label><input value={newSkill.triggers ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, triggers: e.target.value }))} placeholder="when user asks to analyze…" /></div>
+            <div className="field"><label>Use when (optional)</label><input value={newSkill.useWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, useWhen: e.target.value }))} placeholder="user provides a report document" /></div>
+            <div className="field"><label>Do not use when (optional)</label><input value={newSkill.doNotUseWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, doNotUseWhen: e.target.value }))} placeholder="no document is provided" /></div>
             <div className="button-row">
               <button className="secondary-button" disabled={!newSkill.id.trim() || !newSkill.name.trim()} onClick={addSkill}>+ Add skill</button>
+              <button className="primary-button" onClick={() => setStep("policies")}>Next: Policies →</button>
+            </div>
+          </>
+        )}
+
+        {step === "policies" && (
+          <>
+            <h2>Policies ({form.policies.length} defined)</h2>
+            <p className="form-copy">Policies are guardrails and rules the kit enforces — what it should always or never do. Each policy is a plain-text statement.</p>
+            {form.policies.map((p, i) => (
+              <div key={p.id} className="provider-card" style={{ marginBottom: 8 }}>
+                <p className="form-copy" style={{ margin: "2px 0" }}>{p.text}</p>
+                <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, policies: f.policies.filter((_, j) => j !== i) }))}>Remove</button>
+              </div>
+            ))}
+            <div className="field"><label>Policy text</label><textarea value={newPolicy.text} onChange={(e) => setNewPolicy((p) => ({ ...p, text: e.target.value }))} style={{ minHeight: 64 }} placeholder="Always cite sources when summarizing documents." /></div>
+            <div className="button-row">
+              <button className="secondary-button" disabled={!newPolicy.text.trim()} onClick={addPolicy}>+ Add policy</button>
               <button className="primary-button" onClick={() => setStep("prompts")}>Next: Prompts →</button>
             </div>
           </>
@@ -295,7 +452,7 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
         {step === "prompts" && (
           <>
             <h2>Prepared prompts ({form.prompts.length} defined)</h2>
-            <p className="form-copy">Prepared prompts are templated workflows users can run from the Use section. Optional but recommended.</p>
+            <p className="form-copy">Prepared prompts are templated workflows users can run from the Use section. Use {"{{variable}}"} syntax for inputs. Optional but recommended.</p>
             {form.prompts.map((p, i) => (
               <div key={p.id} className="provider-card" style={{ marginBottom: 8 }}>
                 <strong>{p.name}</strong> <span className="inline-code">{p.id}</span>
@@ -323,6 +480,7 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
               <p><strong>Description:</strong> {form.description}</p>
               {form.domain && <p><strong>Domain:</strong> {form.domain}</p>}
               <p><strong>Skills:</strong> {form.skills.length} defined</p>
+              <p><strong>Policies:</strong> {form.policies.length} defined</p>
               <p><strong>Prompts:</strong> {form.prompts.length} defined</p>
             </div>
             {!canCreate && <p className="inline-warning">Fill in Kit ID, Name, and Description to create.</p>}
@@ -335,7 +493,7 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
           </>
         )}
 
-        {stepIdx < STEPS.length - 1 && step !== "basics" && step !== "skills" && step !== "prompts" && step !== "review" && (
+        {stepIdx < STEPS.length - 1 && step !== "basics" && step !== "skills" && step !== "policies" && step !== "prompts" && step !== "review" && (
           <div className="button-row" style={{ marginTop: 12 }}>
             <button className="secondary-button" onClick={() => setStep(STEPS[Math.max(0, stepIdx - 1)].id)}>← Back</button>
           </div>

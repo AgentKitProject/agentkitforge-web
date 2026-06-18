@@ -23,6 +23,27 @@ type PreparedPromptFull = {
   outputMode?: string;
 };
 
+// Run parameters match the desktop's PreparedPromptRenderOptions
+type RunParams = {
+  contextMode: "all" | "triggered";
+  includePolicies: boolean;
+  includeTemplates: boolean;
+  includeWorkflows: boolean;
+  includePreparedPrompts: boolean;
+  validationProfile: "local-valid" | "publishable" | "trusted" | "verified";
+  validateBeforeRender: boolean;
+};
+
+const DEFAULT_RUN_PARAMS: RunParams = {
+  contextMode: "all",
+  includePolicies: true,
+  includeTemplates: true,
+  includeWorkflows: true,
+  includePreparedPrompts: false,
+  validationProfile: "local-valid",
+  validateBeforeRender: false
+};
+
 export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitEntry[]; notify: Notify }) {
   const [kitId, setKitId] = useState<string>("");
   const [prompts, setPrompts] = useState<PreparedPromptFull[]>([]);
@@ -31,6 +52,8 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
   const [rendered, setRendered] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [hint, setHint] = useState<string>("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [runParams, setRunParams] = useState<RunParams>(DEFAULT_RUN_PARAMS);
 
   // Load prompts when kit changes
   useEffect(() => {
@@ -73,7 +96,13 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
     if (!kitId || !promptId) return;
     setBusy(true);
     try {
-      const res = await forge.renderPreparedPrompt({ rootPath: kitId, promptId, inputValues });
+      const res = await forge.renderPreparedPrompt({
+        rootPath: kitId,
+        promptId,
+        inputValues,
+        // Pass run params through as extra options; the server can use what it supports
+        ...(showAdvanced ? { options: runParams } : {})
+      } as never);
       const r = res as { text?: string; prompt?: string; result?: { rendered?: string; text?: string } };
       setRendered(r.text ?? r.prompt ?? (r.result as { rendered?: string; text?: string } | undefined)?.rendered ?? (r.result as { text?: string } | undefined)?.text ?? JSON.stringify(res, null, 2));
       notify("Prompt rendered.");
@@ -83,6 +112,32 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
       setBusy(false);
     }
   };
+
+  const copyToClipboard = async () => {
+    if (!rendered) return;
+    try {
+      await navigator.clipboard.writeText(rendered);
+      notify("Copied to clipboard.");
+    } catch {
+      notify("Could not copy to clipboard.", true);
+    }
+  };
+
+  const downloadText = () => {
+    if (!rendered) return;
+    const blob = new Blob([rendered], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${promptId || "rendered-prompt"}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const setParam = <K extends keyof RunParams>(key: K, value: RunParams[K]) =>
+    setRunParams((p) => ({ ...p, [key]: value }));
 
   return (
     <div className="use-screen">
@@ -141,8 +196,67 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
             </div>
           ) : null}
 
+          {/* Advanced run parameters */}
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="secondary-button"
+              style={{ fontSize: "0.82em" }}
+              onClick={() => setShowAdvanced((v) => !v)}
+            >
+              {showAdvanced ? "▾" : "▸"} Run parameters
+            </button>
+            {showAdvanced && (
+              <div className="provider-card" style={{ marginTop: 8 }}>
+                <div className="field">
+                  <label style={{ fontSize: "0.88em" }}>Context mode</label>
+                  <select
+                    value={runParams.contextMode}
+                    onChange={(e) => setParam("contextMode", e.target.value as RunParams["contextMode"])}
+                    style={{ fontSize: "0.88em" }}
+                  >
+                    <option value="all">All skills (full context)</option>
+                    <option value="triggered">Triggered (best-matching skills first)</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label style={{ fontSize: "0.88em" }}>Validation profile</label>
+                  <select
+                    value={runParams.validationProfile}
+                    onChange={(e) => setParam("validationProfile", e.target.value as RunParams["validationProfile"])}
+                    style={{ fontSize: "0.88em" }}
+                  >
+                    <option value="local-valid">local-valid</option>
+                    <option value="publishable">publishable</option>
+                    <option value="trusted">trusted</option>
+                    <option value="verified">verified</option>
+                  </select>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
+                  {([
+                    ["validateBeforeRender", "Validate kit before rendering"],
+                    ["includePolicies", "Include policies in context"],
+                    ["includeTemplates", "Include templates in context"],
+                    ["includeWorkflows", "Include workflows in context"],
+                    ["includePreparedPrompts", "Include prepared prompts in context"]
+                  ] as [keyof RunParams, string][]).map(([key, label]) => (
+                    <label key={key} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: "0.88em" }}>
+                      <input
+                        type="checkbox"
+                        checked={!!runParams[key]}
+                        onChange={(e) => setParam(key, e.target.checked as RunParams[typeof key])}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           <button
             className="primary-button"
+            style={{ marginTop: 12 }}
             disabled={!kitId || !promptId || busy}
             onClick={() => void render()}
           >
@@ -150,7 +264,15 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
           </button>
         </div>
         <div className="results-panel">
-          <h2>Rendered prompt</h2>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <h2 style={{ margin: 0 }}>Rendered prompt</h2>
+            {rendered && (
+              <div className="button-row" style={{ margin: 0, gap: 6 }}>
+                <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void copyToClipboard()}>Copy</button>
+                <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={downloadText}>Download</button>
+              </div>
+            )}
+          </div>
           {rendered ? <pre className="json-panel" style={{ whiteSpace: "pre-wrap" }}>{rendered}</pre> : <p>Select a kit and a prepared prompt to render its final text.</p>}
         </div>
       </div>

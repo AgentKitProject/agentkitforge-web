@@ -378,9 +378,27 @@ export class WebForgeClient implements ForgeClient {
       body: JSON.stringify(input)
     });
   }
-  summarizeExampleInputDocuments(): Promise<ExampleInputDocument[]> {
-    // WEB: depends on local file paths; not wired in Phase 1.
-    throw new NotAvailableOnWebError("summarizeExampleInputDocuments");
+  summarizeExampleInputDocuments(_paths: string[]): Promise<ExampleInputDocument[]> {
+    // WEB: the desktop `paths` arg is a filesystem path array (not available on
+    // the web). Web uploads are handled directly in ExampleDocsPanel via the
+    // /api/drafts/summarize-examples route with FormData. This method is kept
+    // to satisfy the ForgeClient interface; the web UI calls the route directly.
+    return Promise.resolve([]);
+  }
+
+  /** Web-only: upload File objects to /api/drafts/summarize-examples. */
+  async summarizeExampleInputDocumentsWeb(files: File[]): Promise<ExampleInputDocument[]> {
+    if (files.length === 0) return [];
+    const form = new FormData();
+    for (const f of files) form.append("file", f);
+    const res = await this.fetchImpl(this.url("/api/drafts/summarize-examples"), {
+      method: "POST",
+      credentials: "include",
+      body: form
+    });
+    const body = (await res.json()) as { summaries?: ExampleInputDocument[]; error?: string };
+    if (!res.ok) throw new Error(body.error ?? `summarizeExampleInputDocuments failed (${res.status})`);
+    return body.summaries ?? [];
   }
 
   // ===========================================================================
