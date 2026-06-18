@@ -14,6 +14,7 @@
 // returned stores are singletons.
 import type { KitStore } from "@/server/store/types";
 import type { UserSettingsStore } from "@/server/store/settings-types";
+import { awsClientEnv } from "@/server/aws-client";
 
 export type StoreBackend = "local" | "aws" | "selfhost";
 
@@ -29,25 +30,8 @@ function requireEnv(name: string): string {
   return v;
 }
 
-/**
- * AWS client region + credentials for the `aws` backend. On Amplify SSR the
- * managed compute role can't be granted DynamoDB/S3 access, and AWS_* env names
- * are reserved by Amplify — so a scoped IAM user's keys are injected via
- * FORGE_AWS_*. Region falls back to the runtime-provided AWS_REGION. When no
- * explicit keys are set, the default credential chain is used (local/role).
- */
-function awsClientEnv(): {
-  region: string;
-  credentials?: { accessKeyId: string; secretAccessKey: string };
-} {
-  const region = process.env.FORGE_AWS_REGION || process.env.AWS_REGION || "us-east-1";
-  const accessKeyId = process.env.FORGE_AWS_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.FORGE_AWS_SECRET_ACCESS_KEY;
-  return {
-    region,
-    ...(accessKeyId && secretAccessKey ? { credentials: { accessKeyId, secretAccessKey } } : {})
-  };
-}
+// awsClientEnv() now lives in server/aws-client.ts so the gateway credit ledger
+// composes against the same region + credentials as the KitStore aws adapters.
 
 let kitStoreSingleton: KitStore | null = null;
 let settingsSingleton: UserSettingsStore | null = null;

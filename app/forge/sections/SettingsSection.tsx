@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CatalogEntry, Forge, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
+import { CreditsPanel } from "./CreditsPanel";
 
 export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notify }) {
   const [providers, setProviders] = useState<PublicProvider[]>([]);
@@ -73,6 +74,9 @@ export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notif
   return (
     <div className="settings-screen">
       <div className="settings-panel">
+        <h2>Credits</h2>
+        <p className="form-copy">Prepaid credits power managed AI when you have no provider configured below.</p>
+        <CreditsPanel notify={notify} showDevGrant />
         <h2>AI providers</h2>
         <p className="form-copy">Configure per-user AI providers (used by Build with AI). API keys are stored server-side and never sent back to the browser.</p>
         {providers.length === 0 ? (

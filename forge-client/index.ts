@@ -9,7 +9,7 @@ import type { ForgeClient } from "./types";
 
 export type { ForgeClient } from "./types";
 export * from "./types";
-export { WebForgeClient, NotAvailableOnWebError } from "./web-client";
+export { WebForgeClient, NotAvailableOnWebError, HttpError } from "./web-client";
 
 export function createForgeClient(): ForgeClient {
   return new WebForgeClient();

@@ -79,6 +79,22 @@ export class NotAvailableOnWebError extends Error {
   }
 }
 
+/**
+ * Thrown by json() for non-2xx responses. Carries the HTTP status and the
+ * parsed JSON body so callers can branch on machine-readable error codes
+ * (e.g. a 402 { code: "insufficient_credits", requiredCents, balanceCents }).
+ */
+export class HttpError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  constructor(status: number, message: string, body: unknown) {
+    super(message);
+    this.name = "HttpError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
 export type WebForgeClientOptions = {
   /** Base path for the API (default ""). Useful for tests. */
   baseUrl?: string;
@@ -136,8 +152,10 @@ export class WebForgeClient implements ForgeClient {
       const message =
         body && typeof body === "object" && "error" in body
           ? String((body as { error: unknown }).error)
-          : `Request failed (${res.status})`;
-      throw new Error(message);
+          : body && typeof body === "object" && "message" in body
+            ? String((body as { message: unknown }).message)
+            : `Request failed (${res.status})`;
+      throw new HttpError(res.status, message, body);
     }
     return body as T;
   }

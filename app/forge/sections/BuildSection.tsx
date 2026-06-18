@@ -3,6 +3,31 @@
 import { useRef, useState } from "react";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
+import { HttpError } from "@/forge-client";
+import { CreditsPanel, InsufficientCreditsBanner } from "./CreditsPanel";
+
+type InsufficientCredits = {
+  message: string;
+  requiredCents?: number;
+  balanceCents?: number;
+  currency?: string;
+};
+
+// Extracts a 402 insufficient-credits payload from a thrown error, else null.
+function asInsufficientCredits(e: unknown): InsufficientCredits | null {
+  if (e instanceof HttpError && e.status === 402) {
+    const body = (e.body ?? {}) as Record<string, unknown>;
+    if (body.code === "insufficient_credits") {
+      return {
+        message: typeof body.message === "string" ? body.message : e.message,
+        requiredCents: typeof body.requiredCents === "number" ? body.requiredCents : undefined,
+        balanceCents: typeof body.balanceCents === "number" ? body.balanceCents : undefined,
+        currency: "USD"
+      };
+    }
+  }
+  return null;
+}
 
 type BuildTab = "ai" | "template" | "draft" | "guided" | "edit-ai";
 
@@ -149,16 +174,23 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
   const [draftJson, setDraftJson] = useState<unknown>(null);
   const [changeRequest, setChangeRequest] = useState("");
   const [exDocs, setExDocs] = useState<ExDocSummary[]>([]);
+  const [credits, setCredits] = useState<InsufficientCredits | null>(null);
 
   const run = async (fn: () => Promise<{ draftJson?: unknown; session?: unknown }>, ok: string) => {
     setBusy(true);
+    setCredits(null);
     try {
       const r = await fn();
       setDraftJson(r.draftJson ?? null);
       setSession(r.session ?? null);
       notify(ok);
     } catch (e) {
-      notify(errMsg(e), true);
+      const ic = asInsufficientCredits(e);
+      if (ic) {
+        setCredits(ic);
+      } else {
+        notify(errMsg(e), true);
+      }
     } finally {
       setBusy(false);
     }
@@ -177,7 +209,8 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
     <div className="form-layout">
       <div className="form-panel">
         <h2>Generate with AI</h2>
-        <p className="form-copy">Uses your default AI provider (configure under Settings). Generate a draft, optionally revise, then render into a kit.</p>
+        <p className="form-copy">Uses your default AI provider if configured under Settings; otherwise managed prepaid credits. Generate a draft, optionally revise, then render into a kit.</p>
+        <CreditsPanel notify={notify} showDevGrant />
         <div className="field">
           <label>Describe the kit you want</label>
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies." />
@@ -192,6 +225,14 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
         <button className="primary-button" style={{ marginTop: 12 }} disabled={!prompt.trim() || busy} onClick={() => void generate()}>
           {busy ? "Working…" : "Generate draft"}
         </button>
+        {credits && (
+          <InsufficientCreditsBanner
+            message={credits.message}
+            requiredCents={credits.requiredCents}
+            balanceCents={credits.balanceCents}
+            currency={credits.currency}
+          />
+        )}
         {draftJson != null && (
           <>
             <div className="field" style={{ marginTop: 12 }}>

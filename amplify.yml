@@ -39,6 +39,17 @@ frontend:
         - 'printf "AGENTKITMARKET_BASE_URL=%s\n" "$AGENTKITMARKET_BASE_URL" >> .env.production'
         - 'printf "AGENTKITFORGE_AI_PROVIDER_CONFIG=%s\n" "$AGENTKITFORGE_AI_PROVIDER_CONFIG" >> .env.production'
         - 'printf "AGENTKITPROJECT_WORKOS_CLIENT_ID=%s\n" "$AGENTKITPROJECT_WORKOS_CLIENT_ID" >> .env.production'
+        # Gateway managed prepaid-credit inference (Gateway 1b). The 4 DynamoDB
+        # tables are reached by the same FORGE_AWS_* IAM user as the KitStore.
+        # ANTHROPIC_API_KEY is the PLATFORM key for managed turns — until it is
+        # set, managed inference errors inertly (BYO providers are unaffected).
+        # ADMIN_EMAILS gates the dev credit-grant route (pre-Stripe testing).
+        - 'printf "GATEWAY_CREDIT_ACCOUNTS_TABLE=%s\n" "$GATEWAY_CREDIT_ACCOUNTS_TABLE" >> .env.production'
+        - 'printf "GATEWAY_CREDIT_TXNS_TABLE=%s\n" "$GATEWAY_CREDIT_TXNS_TABLE" >> .env.production'
+        - 'printf "GATEWAY_CREDIT_HOLDS_TABLE=%s\n" "$GATEWAY_CREDIT_HOLDS_TABLE" >> .env.production'
+        - 'printf "GATEWAY_SESSIONS_TABLE=%s\n" "$GATEWAY_SESSIONS_TABLE" >> .env.production'
+        - 'printf "ANTHROPIC_API_KEY=%s\n" "$ANTHROPIC_API_KEY" >> .env.production'
+        - 'printf "ADMIN_EMAILS=%s\n" "$ADMIN_EMAILS" >> .env.production'
         - 'npm ci'
     build:
       commands:

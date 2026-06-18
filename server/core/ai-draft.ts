@@ -11,6 +11,19 @@
 // Messages API shape used by the desktop bridge.)
 import { loadCore } from "@/server/core/load-core";
 import { getUserSettingsStore } from "@/server/store/user-settings";
+import { runManagedChat } from "@/server/core/gateway";
+import type { ChatRequest } from "@agentkitforge/gateway-core";
+
+// Default model used for MANAGED (platform-credit) turns when the caller does
+// not request one. Kept current with Anthropic's recommended Sonnet id.
+const MANAGED_DEFAULT_MODEL = "claude-sonnet-4-5";
+const MANAGED_MAX_TOKENS = 4000;
+
+// Billing mode selection: a user with ANY configured BYO provider uses BYO
+// (their own key, ledger untouched); otherwise managed prepaid credits.
+type BillingResolution =
+  | { mode: "byo"; provider: ProviderConfig; model: string }
+  | { mode: "managed"; model: string };
 
 type ProviderConfig = {
   id?: string;
@@ -57,6 +70,76 @@ async function resolveProviderConfig(userId: string, providerId?: string): Promi
   const raw = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
   if (raw) return normalizeProviderConfig(JSON.parse(raw) as ProviderConfig);
   throw new Error("No AI provider configured. Add a provider in Settings before generating a draft.");
+}
+
+// Resolve which billing path a turn uses. If the user has a BYO provider
+// configured (or the requested one resolves), use it. Otherwise fall back to
+// MANAGED prepaid credits using the platform Anthropic key.
+async function resolveBilling(
+  userId: string,
+  providerId: string | undefined,
+  inputModel: string | undefined
+): Promise<BillingResolution> {
+  const stored = await (await getUserSettingsStore()).resolveProvider(userId, providerId);
+  if (stored) {
+    const provider = normalizeProviderConfig({
+      id: stored.id,
+      name: stored.name,
+      providerType: stored.providerType,
+      baseUrl: stored.baseUrl,
+      apiKey: stored.apiKey,
+      defaultModel: stored.defaultModel
+    });
+    const model = resolveModel(provider, inputModel);
+    if (!model) throw new Error(`${provider.name} model is required.`);
+    return { mode: "byo", provider, model };
+  }
+  // Env single-provider fallback (headless/dev) still counts as BYO.
+  const raw = process.env.AGENTKITFORGE_AI_PROVIDER_CONFIG;
+  if (raw) {
+    const provider = normalizeProviderConfig(JSON.parse(raw) as ProviderConfig);
+    const model = resolveModel(provider, inputModel);
+    if (!model) throw new Error(`${provider.name} model is required.`);
+    return { mode: "byo", provider, model };
+  }
+  // No BYO provider configured → managed prepaid credits.
+  return { mode: "managed", model: (inputModel?.trim() || MANAGED_DEFAULT_MODEL) };
+}
+
+// Build the gateway ChatRequest for a draft turn from the same prompt parts the
+// BYO callProvider() uses, then run it through the credit-gated managed flow.
+async function callManagedProvider(
+  userId: string,
+  model: string,
+  draftRequest: DraftRequestLike,
+  sourceRef: string
+): Promise<string> {
+  const input = [
+    draftRequest.builderInstructions,
+    "",
+    draftRequest.userPrompt,
+    "",
+    "Return only valid AgentKitDraft JSON.",
+    "Expected JSON schema:",
+    JSON.stringify(draftRequest.expectedJsonSchema)
+  ].join("\n");
+  const request: ChatRequest = {
+    model,
+    system: draftRequest.systemInstructions,
+    messages: [{ role: "user", content: [{ type: "text", text: input }] }],
+    tools: [],
+    maxTokens: MANAGED_MAX_TOKENS
+  };
+  // Rough input-token estimate (~4 chars/token) to size the conservative hold.
+  const estimatedInputTokens = Math.ceil((draftRequest.systemInstructions.length + input.length) / 4);
+  const { response } = await runManagedChat(userId, request, { estimatedInputTokens, sourceRef });
+  const text = response.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+  if (!text) throw new Error("Managed inference returned an empty draft response.");
+  return text;
 }
 
 function resolveModel(provider: ProviderConfig, inputModel?: string): string {
@@ -257,10 +340,8 @@ export type GenerateDraftInput = {
 };
 
 export async function generateDraft(userId: string, input: GenerateDraftInput) {
-  const provider = await resolveProviderConfig(userId, input.providerId);
+  const billing = await resolveBilling(userId, input.providerId, input.model);
   const core = await loadCore();
-  const model = resolveModel(provider, input.model);
-  if (!model) throw new Error(`${provider.name} model is required.`);
   const draftRequest = core.createAgentKitDraftRequest({
     userRequest: input.userRequest,
     targetUsers: toList(input.targetUsers),
@@ -272,21 +353,26 @@ export async function generateDraft(userId: string, input: GenerateDraftInput) {
     excludedSections: input.excludedSections,
     exampleInputDocuments: input.exampleInputDocuments as never
   }) as unknown as DraftRequestLike;
-  const rawText = await callProvider(provider, model, draftRequest);
+  const providerName = billing.mode === "byo" ? billing.provider.name : "Managed credits";
+  const rawText =
+    billing.mode === "byo"
+      ? await callProvider(billing.provider, billing.model, draftRequest)
+      : await callManagedProvider(userId, billing.model, draftRequest, "draft.generate");
   const draft = await parseDraft(core, rawText);
   const session = core.createDraftSession({
     originalRequest: input.userRequest,
     initialDraft: draft,
-    provider: provider.name,
-    model,
+    provider: providerName,
+    model: billing.model,
     warnings: draftRequest.warnings as never,
     name: draft.name
   });
   return {
     draftJson: draft,
     warnings: draftRequest.warnings,
-    providerName: provider.name,
-    model,
+    providerName,
+    model: billing.model,
+    billingMode: billing.mode,
     session,
     currentRevision: core.getCurrentDraftRevision(session)
   };
@@ -306,10 +392,8 @@ export type ReviseDraftInput = {
 };
 
 export async function reviseDraft(userId: string, input: ReviseDraftInput) {
-  const provider = await resolveProviderConfig(userId, input.providerId);
+  const billing = await resolveBilling(userId, input.providerId, input.model);
   const core = await loadCore();
-  const model = resolveModel(provider, input.model);
-  if (!model) throw new Error(`${provider.name} model is required.`);
   const session = core.validateDraftSession(input.session);
   const currentRevision = core.getCurrentDraftRevision(session);
   const revisionRequest = core.createAgentKitDraftRevisionRequest({
@@ -323,20 +407,25 @@ export async function reviseDraft(userId: string, input: ReviseDraftInput) {
     excludedSections: input.excludedSections,
     exampleInputDocuments: input.exampleInputDocuments as never
   }) as unknown as DraftRequestLike;
-  const rawText = await callProvider(provider, model, revisionRequest);
+  const providerName = billing.mode === "byo" ? billing.provider.name : "Managed credits";
+  const rawText =
+    billing.mode === "byo"
+      ? await callProvider(billing.provider, billing.model, revisionRequest)
+      : await callManagedProvider(userId, billing.model, revisionRequest, "draft.revise");
   const draft = await parseDraft(core, rawText);
   const updatedSession = core.addDraftRevision(session, {
     draft,
     changeRequest: input.changeRequest,
-    provider: provider.name,
-    model,
+    provider: providerName,
+    model: billing.model,
     warnings: revisionRequest.warnings as never
   });
   return {
     draftJson: draft,
     warnings: revisionRequest.warnings,
-    providerName: provider.name,
-    model,
+    providerName,
+    model: billing.model,
+    billingMode: billing.mode,
     session: updatedSession,
     currentRevision: core.getCurrentDraftRevision(updatedSession)
   };

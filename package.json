@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@agentkitforge/core": "^0.4.0",
+    "@agentkitforge/gateway-core": "github:AgentKitProject/agentkitgateway-core",
     "@aws-sdk/client-dynamodb": "^3.1069.0",
     "@aws-sdk/client-s3": "^3.1069.0",
     "@aws-sdk/lib-dynamodb": "^3.1069.0",

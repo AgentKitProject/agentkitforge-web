@@ -1,7 +1,7 @@
 // Verifies the WebForgeClient maps ForgeClient methods to the right HTTP
 // endpoints/verbs/bodies, and that desktop-only seams degrade as documented.
 import { describe, expect, it, vi } from "vitest";
-import { NotAvailableOnWebError, WebForgeClient } from "@/forge-client/web-client";
+import { HttpError, NotAvailableOnWebError, WebForgeClient } from "@/forge-client/web-client";
 
 type Call = { url: string; init?: RequestInit };
 
@@ -197,5 +197,22 @@ describe("WebForgeClient endpoint mapping", () => {
     const { client } = makeClient(() => ({ body: {} }));
     const result = await client.summarizeExampleInputDocuments([]);
     expect(result).toEqual([]);
+  });
+
+  it("generate draft surfaces a 402 insufficient_credits body as HttpError (managed credits)", async () => {
+    const { client } = makeClient(() => ({
+      status: 402,
+      body: { code: "insufficient_credits", message: "Out of credits.", requiredCents: 12, balanceCents: 3 }
+    }));
+    await expect(
+      client.generateAgentKitDraftWithAi({ userRequest: "x" } as never)
+    ).rejects.toMatchObject({
+      name: "HttpError",
+      status: 402,
+      body: { code: "insufficient_credits", requiredCents: 12, balanceCents: 3 }
+    });
+    await expect(
+      client.generateAgentKitDraftWithAi({ userRequest: "x" } as never)
+    ).rejects.toBeInstanceOf(HttpError);
   });
 });
