@@ -50,6 +50,44 @@ frontend:
         - 'printf "GATEWAY_SESSIONS_TABLE=%s\n" "$GATEWAY_SESSIONS_TABLE" >> .env.production'
         - 'printf "ANTHROPIC_API_KEY=%s\n" "$ANTHROPIC_API_KEY" >> .env.production'
         - 'printf "ADMIN_EMAILS=%s\n" "$ADMIN_EMAILS" >> .env.production'
+        # AgentKitAuto (Phase A) — standing-approval + run tables, reached by the
+        # same FORGE_AWS_* IAM user. Optional/defaulted (AutoRuns/AutoApprovals in
+        # server/core/auto.ts) so a missing value never breaks the build — NO
+        # preBuild required-var check. Auto reuses ANTHROPIC_API_KEY + the
+        # GatewayCredit* ledger tables above for managed billing. NOTE: the in-
+        # process run dispatcher is dev/self-host only; hosted long-running runs
+        # require the deferred Fargate / k8s-Job worker.
+        - 'printf "AUTO_RUNS_TABLE=%s\n" "$AUTO_RUNS_TABLE" >> .env.production'
+        - 'printf "AUTO_APPROVALS_TABLE=%s\n" "$AUTO_APPROVALS_TABLE" >> .env.production'
+        # Auto BILLING MODEL — both OPTIONAL with code defaults (server/core/auto.ts:
+        # AUTO_MARKUP_BPS=2500 / 25% on MANAGED Auto inference, separate from the
+        # gateway's 15%; AUTO_CLOUD_RUN_CENTS_PER_MIN=1 per-minute compute fee on
+        # BYO + CLOUD runs only). A missing value never breaks the build — NO
+        # preBuild required-var check. Markup is server-chosen by code path.
+        - 'printf "AUTO_MARKUP_BPS=%s\n" "$AUTO_MARKUP_BPS" >> .env.production'
+        - 'printf "AUTO_CLOUD_RUN_CENTS_PER_MIN=%s\n" "$AUTO_CLOUD_RUN_CENTS_PER_MIN" >> .env.production'
+        # AgentKitAuto HOSTED execution (Fargate per-run worker). All OPTIONAL —
+        # when AUTO_DISPATCH != "fargate" (or unset) the app uses the in-process
+        # dispatcher (dev/self-host). NO preBuild required-var check. The ECS ids
+        # come from the infra/ CDK CfnOutputs; AUTO_WORKER_SERVICE_KEY is a
+        # generated server-only secret shared with the worker (never echoed,
+        # never sent to the browser/Forge). WEB_FORGE_INTERNAL_URL is this app''s
+        # public origin (consumed by the worker; baked here for parity).
+        - 'printf "AUTO_DISPATCH=%s\n" "$AUTO_DISPATCH" >> .env.production'
+        - 'printf "AUTO_ECS_CLUSTER=%s\n" "$AUTO_ECS_CLUSTER" >> .env.production'
+        - 'printf "AUTO_ECS_TASK_DEF=%s\n" "$AUTO_ECS_TASK_DEF" >> .env.production'
+        - 'printf "AUTO_ECS_SUBNET_IDS=%s\n" "$AUTO_ECS_SUBNET_IDS" >> .env.production'
+        - 'printf "AUTO_ECS_SECURITY_GROUP_ID=%s\n" "$AUTO_ECS_SECURITY_GROUP_ID" >> .env.production'
+        - 'printf "AUTO_ECS_CONTAINER_NAME=%s\n" "$AUTO_ECS_CONTAINER_NAME" >> .env.production'
+        - 'printf "AUTO_WORKER_SERVICE_KEY=%s\n" "$AUTO_WORKER_SERVICE_KEY" >> .env.production'
+        - 'printf "WEB_FORGE_INTERNAL_URL=%s\n" "$WEB_FORGE_INTERNAL_URL" >> .env.production'
+        # PROTECTED/paid Market kit resolution over the hosted Auto worker path:
+        # web-forge → market-app service licensed-package endpoint. OPTIONAL — when
+        # unset, protected Market kits cannot run over the worker (run refused);
+        # local + free kits unaffected. NO preBuild required-var check. Must EQUAL
+        # the MARKET_SERVICE_KEY set on agentkitmarket-app. Distinct from
+        # AUTO_WORKER_SERVICE_KEY. Never echoed to logs; never sent to the browser.
+        - 'printf "MARKET_SERVICE_KEY=%s\n" "$MARKET_SERVICE_KEY" >> .env.production'
         # Stripe prepaid credit top-up (Gateway 1b-ii). Both vars are optional —
         # the checkout and webhook routes return 503 "payments not configured"
         # when either is absent. Set in Amplify env once keys are provisioned;

@@ -29,6 +29,7 @@ import { MyKits } from "./sections/MyKits";
 import { BuildSection } from "./sections/BuildSection";
 import { UseSection } from "./sections/UseSection";
 import { RunSection } from "./sections/RunSection";
+import { AutoSection } from "./sections/AutoSection";
 import { ImportSection } from "./sections/ImportSection";
 import { PackageExportSection } from "./sections/PackageExportSection";
 import { MarketSubmitSection, SubmitModal } from "./sections/MarketSubmitSection";
@@ -44,6 +45,7 @@ type SectionId =
   | "build"
   | "use"
   | "run"
+  | "auto"
   | "import"
   | "package-export"
   | "install-targets"
@@ -57,6 +59,7 @@ const NAV: { id: SectionId; label: string; Icon: typeof PackageIcon }[] = [
   { id: "build", label: "Build", Icon: HammerIcon },
   { id: "use", label: "Use", Icon: PlayIcon },
   { id: "run", label: "Run / Chat", Icon: SparklesIcon },
+  { id: "auto", label: "Auto", Icon: PlayIcon },
   { id: "import", label: "Import", Icon: ImportIcon },
   { id: "package-export", label: "Package / Export", Icon: ExportIcon },
   { id: "install-targets", label: "Install Targets", Icon: PlugIcon },
@@ -70,6 +73,7 @@ const SECTION_TITLES: Record<SectionId, { eyebrow: string; title: string }> = {
   build: { eyebrow: "Create", title: "Build an Agent Kit" },
   use: { eyebrow: "Run", title: "Use a Kit" },
   run: { eyebrow: "Run", title: "Chat with a Kit" },
+  auto: { eyebrow: "Autonomous", title: "AgentKitAuto" },
   import: { eyebrow: "Bring in", title: "Import a Kit" },
   "package-export": { eyebrow: "Distribute", title: "Package / Export" },
   "install-targets": { eyebrow: "Deploy", title: "Install Targets" },
@@ -254,6 +258,8 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
             <UseSection forge={forge} kits={kits} notify={notify} />
           ) : section === "run" ? (
             <RunSection forge={forge} kits={kits} notify={notify} />
+          ) : section === "auto" ? (
+            <AutoSection kits={kits} notify={notify} />
           ) : section === "import" ? (
             <ImportSection forge={forge} notify={notify} onDone={(kitId) => { void refresh().then(() => { setSection("my-kits"); if (kitId) setOpenKitId(kitId); }); }} />
           ) : section === "package-export" ? (
