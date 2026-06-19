@@ -32,18 +32,26 @@
 
 import {
   ApprovalDeniedError,
+  CronParseError,
   makeAutoDeps,
+  nextFireAfter,
   processAutoRun,
+  runDueSchedules,
+  validateCron,
   type AutoApproval,
   type AutoBackend,
   type AutoRun,
+  type AutoSchedule,
   type AutoStorageDeps,
   type CreateApprovalInput,
   type CreateRunInput,
+  type CreateScheduleInput,
   type KitRef,
   type ProcessAutoRunDeps,
   type ResolveKitContext,
-  type ResolvedKitContext
+  type ResolvedKitContext,
+  type ScheduleSweepSummary,
+  type UpdateScheduleInput
 } from "@agentkitforge/auto-core";
 import {
   AnthropicChatProvider,
@@ -68,7 +76,7 @@ import {
 import type { StoredSession, TokenStore } from "@agentkitforge/core/market";
 
 export { ApprovalDeniedError };
-export type { AutoApproval, AutoRun, KitRef };
+export type { AutoApproval, AutoRun, AutoSchedule, KitRef };
 
 // ---------------------------------------------------------------------------
 // Storage deps (singleton)
@@ -87,10 +95,14 @@ function autoBackend(): AutoBackend {
   return raw === "selfhost" ? "selfhost" : "aws";
 }
 
-function autoTableNames(): { runs: string; approvals: string } {
+function autoTableNames(): { runs: string; approvals: string; schedules: string } {
   return {
     runs: process.env.AUTO_RUNS_TABLE || "AutoRuns",
-    approvals: process.env.AUTO_APPROVALS_TABLE || "AutoApprovals"
+    approvals: process.env.AUTO_APPROVALS_TABLE || "AutoApprovals",
+    // Phase B: the standing-schedules table (auto-core's aws adapter requires it
+    // via loadAutoDynamoTableNames; we always pass an explicit name so deployments
+    // that haven't set the env still get the documented default).
+    schedules: process.env.AUTO_SCHEDULES_TABLE || "AutoSchedules"
   };
 }
 
@@ -602,6 +614,12 @@ export async function startRun(input: {
   model?: string;
   files?: { path: string; content: string }[];
   kitContext: KitContextOptions;
+  /** How this run was triggered. Defaults to "on_demand" (Phase A). The Phase B
+   *  scheduler passes "schedule" + scheduleId so the SAME create + gate + dispatch
+   *  path is reused for cron-fired runs. */
+  trigger?: "on_demand" | "schedule";
+  /** The AutoSchedule that produced this run (only with trigger "schedule"). */
+  scheduleId?: string;
 }): Promise<AutoRun> {
   if (typeof input.prompt !== "string" || input.prompt.trim().length === 0) {
     throw new AutoValidationError("A run input prompt is required.");
@@ -671,7 +689,11 @@ export async function startRun(input: {
     createdAt: now(),
     inferenceMode: billing.inferenceMode,
     isCloudRun: billing.isCloudRun,
-    cloudRunCentsPerMin: billing.cloudRunCentsPerMin
+    cloudRunCentsPerMin: billing.cloudRunCentsPerMin,
+    // Phase B provenance: scheduler-fired runs carry trigger "schedule" +
+    // scheduleId; on-demand runs default to "on_demand" (back-compat).
+    trigger: input.trigger ?? "on_demand",
+    ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {})
   };
   const run = await storage.runs.createRun(createInput);
 
@@ -826,4 +848,301 @@ export function parseKitRef(raw: unknown): KitRef {
     return { source: "local", localKitId };
   }
   throw new AutoValidationError('kitRef.source must be "market" or "local".');
+}
+
+// ===========================================================================
+// AgentKitAuto — Phase B: scheduled (cron) runs
+//
+// A standing AutoSchedule fires an autonomous run of a kit on a recurring cron
+// cadence, UNDER an existing standing approval, bounded by a REQUIRED per-run
+// budget. The scheduling ENGINE (cron eval, due-selection, double-fire
+// prevention, per-schedule resilience) lives in @agentkitforge/auto-core
+// (runDueSchedules + nextFireAfter). This module only:
+//   - validates + persists schedules (CRUD), reusing the Phase A approval gate;
+//   - provides the injected createAndDispatch that turns a due schedule into a
+//     run via the EXACT same path startRun uses (approval gate, billing
+//     resolution, run create, dispatcher) with trigger "schedule" + scheduleId.
+//
+// AUTH: schedule CRUD is userId-keyed and called by both auth paths (cookie +
+// bearer) exactly like runs/approvals. The sweep is the THIRD (service-key) path.
+// ===========================================================================
+
+/** Default cron timezone when the caller omits one. */
+const DEFAULT_SCHEDULE_TZ = "UTC";
+
+/** Validates a cron string; rethrows as AutoValidationError (→ 400). */
+function assertValidCron(cron: string): void {
+  if (typeof cron !== "string" || cron.trim().length === 0) {
+    throw new AutoValidationError("A cron expression is required.");
+  }
+  try {
+    validateCron(cron);
+  } catch (err) {
+    const detail = err instanceof CronParseError ? err.message : "invalid cron expression";
+    throw new AutoValidationError(`Invalid cron expression: ${detail}`);
+  }
+}
+
+/** Validates a timezone by attempting to compute a next fire; bad zones throw
+ *  CronParseError from nextFireAfter → surfaced as AutoValidationError. Returns
+ *  the computed first nextRunAt so callers don't recompute. */
+function computeNextRunAt(cron: string, fromISO: string, timezone: string): string {
+  try {
+    return nextFireAfter(cron, fromISO, timezone);
+  } catch (err) {
+    const detail = err instanceof CronParseError ? err.message : "invalid cron/timezone";
+    throw new AutoValidationError(`Cannot schedule: ${detail}`);
+  }
+}
+
+/**
+ * Re-checks that a standing approval valid for (userId, kitRef) exists, is not
+ * revoked, covers budgetCents, AND that the supplied approvalId matches it. A
+ * schedule MUST reference a real standing approval the user owns (CLAUDE.md / the
+ * task spec) — a schedule never widens consent. Throws ApprovalDeniedError (403)
+ * / AutoValidationError (400) on failure; returns the matched approval.
+ */
+async function requireScheduleApproval(input: {
+  userId: string;
+  kitRef: KitRef;
+  budgetCents: number;
+  approvalId: string;
+}): Promise<AutoApproval> {
+  const storage = await getAutoStorage();
+  const approval = await storage.approvals.getApprovalForKit(input.userId, input.kitRef);
+  if (!approval) {
+    throw new ApprovalDeniedError("No standing approval exists for this kit. Create one first.");
+  }
+  if (approval.revokedAt !== null) {
+    throw new ApprovalDeniedError("The standing approval for this kit has been revoked.");
+  }
+  // The schedule must point at THIS user's matching approval.
+  if (approval.id !== input.approvalId) {
+    throw new AutoValidationError(
+      "approvalId does not match the standing approval for this kit."
+    );
+  }
+  if (input.budgetCents > approval.maxBudgetCents) {
+    throw new ApprovalDeniedError(
+      `Schedule budget (${input.budgetCents}¢) exceeds the approval ceiling (${approval.maxBudgetCents}¢).`
+    );
+  }
+  return approval;
+}
+
+/**
+ * Create a standing schedule. Validates cron (auto-core validateCron), the
+ * standing approval (must belong to the user + match kitRef + cover the budget),
+ * the per-run budget (REQUIRED), the model, and the timezone; computes the
+ * initial nextRunAt via nextFireAfter(cron, now, tz).
+ *
+ * @throws AutoValidationError  bad cron/timezone/budget/model/approval mismatch (→ 400).
+ * @throws ApprovalDeniedError  no matching/over-ceiling approval (→ 403).
+ */
+export async function createSchedule(input: {
+  userId: string;
+  kitRef: KitRef;
+  cron: string;
+  timezone?: string;
+  prompt: string;
+  budgetCents: number;
+  model?: string;
+  approvalId: string;
+  files?: { path: string; content: string }[];
+}): Promise<AutoSchedule> {
+  if (typeof input.prompt !== "string" || input.prompt.trim().length === 0) {
+    throw new AutoValidationError("A schedule task prompt is required.");
+  }
+  if (!Number.isInteger(input.budgetCents) || input.budgetCents <= 0) {
+    throw new AutoValidationError("budgetCents is required and must be a positive integer (US cents).");
+  }
+  if (typeof input.approvalId !== "string" || input.approvalId.trim().length === 0) {
+    throw new AutoValidationError("approvalId is required.");
+  }
+  assertValidCron(input.cron);
+  const timezone = input.timezone && input.timezone.trim().length > 0 ? input.timezone : DEFAULT_SCHEDULE_TZ;
+  const model = isManagedModel(input.model) ? input.model! : MANAGED_DEFAULT_MODEL;
+
+  // Approval gate (same semantics as startRun) — and approvalId must match.
+  await requireScheduleApproval({
+    userId: input.userId,
+    kitRef: input.kitRef,
+    budgetCents: input.budgetCents,
+    approvalId: input.approvalId
+  });
+
+  const createdAt = now();
+  const nextRunAt = computeNextRunAt(input.cron, createdAt, timezone);
+
+  const storage = await getAutoStorage();
+  const createInput: CreateScheduleInput = {
+    userId: input.userId,
+    kitRef: input.kitRef,
+    cron: input.cron,
+    timezone,
+    input: {
+      prompt: input.prompt,
+      ...(input.files && input.files.length > 0 ? { files: input.files } : {})
+    },
+    budgetCents: input.budgetCents,
+    model,
+    approvalId: input.approvalId,
+    enabled: true,
+    createdAt,
+    nextRunAt
+  };
+  return storage.schedules.createSchedule(createInput);
+}
+
+/** List a user's schedules. */
+export async function listSchedules(userId: string): Promise<AutoSchedule[]> {
+  const storage = await getAutoStorage();
+  return storage.schedules.listSchedulesByUser(userId);
+}
+
+/** Get a single schedule, ownership-checked. Null for missing/cross-user (→ 404). */
+export async function getSchedule(userId: string, scheduleId: string): Promise<AutoSchedule | null> {
+  const storage = await getAutoStorage();
+  const s = await storage.schedules.getSchedule(scheduleId);
+  if (!s || s.userId !== userId) return null;
+  return s;
+}
+
+/**
+ * Patch a schedule (enable/disable/edit), ownership-checked. Returns null for a
+ * missing/cross-user schedule (→ 404). When cron/timezone/enabled change, the
+ * nextRunAt is recomputed here (auto-core requires the caller to supply it). When
+ * budget/approval/kitRef-affecting fields change, the approval gate is re-checked.
+ *
+ * @throws AutoValidationError / ApprovalDeniedError on invalid edits.
+ */
+export async function updateSchedule(
+  userId: string,
+  scheduleId: string,
+  patch: {
+    cron?: string;
+    timezone?: string;
+    prompt?: string;
+    budgetCents?: number;
+    model?: string;
+    approvalId?: string;
+    enabled?: boolean;
+    files?: { path: string; content: string }[];
+  }
+): Promise<AutoSchedule | null> {
+  const storage = await getAutoStorage();
+  const current = await storage.schedules.getSchedule(scheduleId);
+  if (!current || current.userId !== userId) return null;
+
+  // Merge to the effective post-patch values used for validation + recompute.
+  const cron = patch.cron !== undefined ? patch.cron : current.cron;
+  const timezone =
+    patch.timezone !== undefined && patch.timezone.trim().length > 0
+      ? patch.timezone
+      : patch.timezone === undefined
+        ? current.timezone
+        : DEFAULT_SCHEDULE_TZ;
+  const budgetCents = patch.budgetCents !== undefined ? patch.budgetCents : current.budgetCents;
+  const approvalId = patch.approvalId !== undefined ? patch.approvalId : current.approvalId;
+  const enabled = patch.enabled !== undefined ? patch.enabled : current.enabled;
+
+  if (patch.cron !== undefined) assertValidCron(cron);
+  if (patch.budgetCents !== undefined && (!Number.isInteger(budgetCents) || budgetCents <= 0)) {
+    throw new AutoValidationError("budgetCents must be a positive integer (US cents).");
+  }
+
+  // Re-check the approval gate when anything that touches consent/budget changed.
+  if (patch.budgetCents !== undefined || patch.approvalId !== undefined) {
+    await requireScheduleApproval({
+      userId,
+      kitRef: current.kitRef,
+      budgetCents,
+      approvalId
+    });
+  }
+
+  const update: UpdateScheduleInput = { updatedAt: now() };
+  if (patch.cron !== undefined) update.cron = patch.cron;
+  if (patch.timezone !== undefined) update.timezone = timezone;
+  if (patch.budgetCents !== undefined) update.budgetCents = budgetCents;
+  if (patch.approvalId !== undefined) update.approvalId = approvalId;
+  if (patch.model !== undefined) {
+    update.model = isManagedModel(patch.model) ? patch.model : MANAGED_DEFAULT_MODEL;
+  }
+  if (patch.enabled !== undefined) update.enabled = enabled;
+  if (patch.prompt !== undefined || patch.files !== undefined) {
+    const prompt = patch.prompt !== undefined ? patch.prompt : current.input.prompt;
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+      throw new AutoValidationError("A schedule task prompt is required.");
+    }
+    const files = patch.files !== undefined ? patch.files : current.input.files;
+    update.input = { prompt, ...(files && files.length > 0 ? { files } : {}) };
+  }
+
+  // Recompute nextRunAt when the cadence/timezone changed, OR when (re)enabling a
+  // schedule (so a long-disabled schedule doesn't fire for every missed slot).
+  const cadenceChanged = patch.cron !== undefined || patch.timezone !== undefined;
+  const reEnabling = patch.enabled === true && !current.enabled;
+  if (cadenceChanged || reEnabling) {
+    update.nextRunAt = computeNextRunAt(cron, now(), timezone);
+  }
+
+  const updated = await storage.schedules.updateSchedule(scheduleId, update);
+  return updated ?? null;
+}
+
+/** Delete a schedule, ownership-checked. Returns false for missing/cross-user. */
+export async function deleteSchedule(userId: string, scheduleId: string): Promise<boolean> {
+  const storage = await getAutoStorage();
+  const s = await storage.schedules.getSchedule(scheduleId);
+  if (!s || s.userId !== userId) return false;
+  await storage.schedules.deleteSchedule(scheduleId);
+  return true;
+}
+
+/**
+ * Run one scheduling SWEEP (the per-minute cron tick). This is the THIRD
+ * (service-key) path — there is NO user session; the schedule's OWN userId drives
+ * every per-run decision.
+ *
+ * It builds `createAndDispatch(schedule)` which constructs a run from the schedule
+ * and runs the EXACT same path startRun uses (approval gate + billing resolution +
+ * run create + dispatch via the selected dispatcher — Fargate on hosted), stamping
+ * trigger "schedule" + scheduleId. auto-core's runDueSchedules then:
+ *   - selects due (enabled, nextRunAt <= now) schedules off the dueIndex;
+ *   - re-checks each against the standing approval (defense in depth);
+ *   - advances nextRunAt BEFORE returning to prevent double-firing;
+ *   - isolates per-schedule failures into the summary (one bad schedule never
+ *     aborts the sweep).
+ *
+ * The sweep is quick: it only creates + dispatches; the runs themselves execute on
+ * Fargate (hosted). Reads from the same KitStore-backed auto deps.
+ */
+export async function runScheduleSweep(): Promise<ScheduleSweepSummary> {
+  const storage = await getAutoStorage();
+
+  const createAndDispatch = async (schedule: AutoSchedule): Promise<AutoRun> => {
+    // SERVICE MODE: no user session. The schedule's userId drives kit-context
+    // resolution (protected Market kits resolve server-to-service via
+    // MARKET_SERVICE_KEY). Mirrors the worker path's serviceUserId opts.
+    return startRun({
+      userId: schedule.userId,
+      kitRef: schedule.kitRef,
+      prompt: schedule.input.prompt,
+      budgetCents: schedule.budgetCents,
+      model: schedule.model,
+      ...(schedule.input.files && schedule.input.files.length > 0
+        ? { files: schedule.input.files }
+        : {}),
+      kitContext: { serviceUserId: schedule.userId },
+      trigger: "schedule",
+      scheduleId: schedule.id
+    });
+  };
+
+  return runDueSchedules({
+    deps: { schedules: storage.schedules, approvals: storage.approvals },
+    now: now(),
+    createAndDispatch
+  });
 }

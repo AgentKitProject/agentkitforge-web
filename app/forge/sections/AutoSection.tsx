@@ -52,10 +52,42 @@ type Run = {
   auditLog?: AuditEntry[];
 };
 
+type Schedule = {
+  id: string;
+  kitRef: { source: string; localKitId?: string; marketKitId?: string; slug?: string };
+  cron: string;
+  timezone: string;
+  input: { prompt: string };
+  budgetCents: number;
+  model: string;
+  approvalId: string;
+  enabled: boolean;
+  createdAt: string;
+  lastRunAt: string | null;
+  lastRunId: string | null;
+  nextRunAt: string;
+  lastError: string | null;
+};
+
 const ACTIVE = new Set(["queued", "running"]);
 
 function centsToUsd(c: number): string {
   return `$${(c / 100).toFixed(2)}`;
+}
+
+function fmtTs(ts: string | null): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+/** The browser's IANA timezone, used as the schedule default. */
+function localTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
 }
 
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -86,6 +118,15 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   const [runBudgetUsd, setRunBudgetUsd] = useState("0.50");
   const [runBusy, setRunBusy] = useState(false);
 
+  // Schedule state (Phase B).
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [schedKitId, setSchedKitId] = useState("");
+  const [schedCron, setSchedCron] = useState("0 9 * * *");
+  const [schedTz, setSchedTz] = useState(localTimezone());
+  const [schedPrompt, setSchedPrompt] = useState("");
+  const [schedBudgetUsd, setSchedBudgetUsd] = useState("0.50");
+  const [schedBusy, setSchedBusy] = useState(false);
+
   const loadApprovals = useCallback(async () => {
     try {
       const { approvals } = await jsonFetch<{ approvals: Approval[] }>("/api/auto/approvals");
@@ -104,10 +145,20 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     }
   }, [notify]);
 
+  const loadSchedules = useCallback(async () => {
+    try {
+      const { schedules } = await jsonFetch<{ schedules: Schedule[] }>("/api/auto/schedules");
+      setSchedules(schedules);
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  }, [notify]);
+
   useEffect(() => {
     void loadApprovals();
     void loadRuns();
-  }, [loadApprovals, loadRuns]);
+    void loadSchedules();
+  }, [loadApprovals, loadRuns, loadSchedules]);
 
   // Poll the open run + the list while a run is active.
   useEffect(() => {
@@ -198,6 +249,66 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
       await jsonFetch(`/api/auto/runs/${id}/cancel`, { method: "POST" });
       notify("Cancellation requested.");
       await loadRuns();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  // The standing approval for a local kit id (schedules must reference one).
+  const approvalForKit = (kitId: string): Approval | undefined =>
+    approvals.find((a) => a.kitRef.localKitId === kitId && a.revokedAt === null);
+
+  const createSchedule = async () => {
+    if (!schedKitId) return notify("Pick a kit (one with a standing approval).", true);
+    const approval = approvalForKit(schedKitId);
+    if (!approval) return notify("That kit has no standing approval.", true);
+    if (!schedCron.trim()) return notify("Enter a cron expression.", true);
+    if (!schedPrompt.trim()) return notify("Enter a task for the schedule.", true);
+    const cents = Math.round(parseFloat(schedBudgetUsd) * 100);
+    if (!Number.isInteger(cents) || cents <= 0) return notify("Per-run budget is required (positive amount).", true);
+    setSchedBusy(true);
+    try {
+      const kitRef: KitRef = { source: "local", localKitId: schedKitId };
+      await jsonFetch<Schedule>("/api/auto/schedules", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kitRef,
+          cron: schedCron.trim(),
+          timezone: schedTz.trim() || "UTC",
+          input: { prompt: schedPrompt },
+          budgetCents: cents,
+          approvalId: approval.id
+        })
+      });
+      notify("Schedule created.");
+      setSchedPrompt("");
+      await loadSchedules();
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setSchedBusy(false);
+    }
+  };
+
+  const toggleSchedule = async (s: Schedule) => {
+    try {
+      await jsonFetch<Schedule>(`/api/auto/schedules/${s.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !s.enabled })
+      });
+      await loadSchedules();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  const removeSchedule = async (id: string) => {
+    try {
+      await jsonFetch(`/api/auto/schedules/${id}`, { method: "DELETE" });
+      notify("Schedule deleted.");
+      await loadSchedules();
     } catch (e) {
       notify(errMsg(e), true);
     }
@@ -299,6 +410,79 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         <button className="primary-button" disabled={runBusy} onClick={() => void startRun()}>
           {runBusy ? "Starting…" : "Start run"}
         </button>
+
+        {/* ---- Schedules (Phase B) ---- */}
+        <h3 style={{ marginTop: 24 }}>Schedules</h3>
+        <p className="form-copy">
+          A schedule fires a run automatically on a cron cadence, under the kit&apos;s standing approval and a
+          per-run budget. Each fire is still gated by the approval — a schedule never widens consent.
+        </p>
+        <div className="field">
+          <label>Kit (must have an approval)</label>
+          <select value={schedKitId} onChange={(e) => setSchedKitId(e.target.value)}>
+            <option value="">Select a kit…</option>
+            {kits
+              .filter((k) => kitsWithApproval.includes(k.kitId))
+              .map((k) => (
+                <option key={k.kitId} value={k.kitId}>
+                  {k.name}
+                </option>
+              ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Cron (minute hour dom month dow)</label>
+          <input type="text" value={schedCron} onChange={(e) => setSchedCron(e.target.value)} placeholder="0 9 * * *" />
+        </div>
+        <div className="field">
+          <label>Timezone (IANA)</label>
+          <input type="text" value={schedTz} onChange={(e) => setSchedTz(e.target.value)} placeholder="UTC" />
+        </div>
+        <div className="field">
+          <label>Task</label>
+          <textarea rows={3} value={schedPrompt} onChange={(e) => setSchedPrompt(e.target.value)} placeholder="What should the kit do on each run?" />
+        </div>
+        <div className="field">
+          <label>Per-run budget (USD, required)</label>
+          <input type="number" min="0.01" step="0.01" value={schedBudgetUsd} onChange={(e) => setSchedBudgetUsd(e.target.value)} />
+        </div>
+        <button className="primary-button" disabled={schedBusy} onClick={() => void createSchedule()}>
+          {schedBusy ? "Creating…" : "Create schedule"}
+        </button>
+
+        <div className="results-panel" style={{ marginTop: 16 }}>
+          <h4 style={{ marginTop: 0 }}>Active schedules</h4>
+          {schedules.length === 0 ? (
+            <p className="form-copy">No schedules yet.</p>
+          ) : (
+            schedules.map((s) => (
+              <div key={s.id} className="provider-card" style={{ marginBottom: 8, padding: "8px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: "0.85em" }}>
+                    <strong>{kitLabel(s.kitRef.localKitId)}</strong>{" "}
+                    <code style={{ fontSize: "0.9em" }}>{s.cron}</code>{" "}
+                    <span style={{ color: "var(--color-text-secondary)" }}>({s.timezone})</span>
+                    <div style={{ color: "var(--color-text-secondary)" }}>
+                      {centsToUsd(s.budgetCents)}/run · next {fmtTs(s.nextRunAt)} · last {fmtTs(s.lastRunAt)}
+                    </div>
+                    {s.lastError && (
+                      <div style={{ color: "var(--color-error)" }}>last error: {s.lastError}</div>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontWeight: 400, fontSize: "0.8em" }}>
+                      <input type="checkbox" checked={s.enabled} onChange={() => void toggleSchedule(s)} />
+                      {s.enabled ? "on" : "off"}
+                    </label>
+                    <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void removeSchedule(s.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
       {/* ---- Run history + detail ---- */}

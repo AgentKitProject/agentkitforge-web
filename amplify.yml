@@ -59,6 +59,9 @@ frontend:
         # require the deferred Fargate / k8s-Job worker.
         - 'printf "AUTO_RUNS_TABLE=%s\n" "$AUTO_RUNS_TABLE" >> .env.production'
         - 'printf "AUTO_APPROVALS_TABLE=%s\n" "$AUTO_APPROVALS_TABLE" >> .env.production'
+        # AUTO_SCHEDULES_TABLE (Phase B) — OPTIONAL, baked, no preBuild gate (code
+        # defaults to AutoSchedules in server/core/auto.ts).
+        - 'printf "AUTO_SCHEDULES_TABLE=%s\n" "$AUTO_SCHEDULES_TABLE" >> .env.production'
         # Auto BILLING MODEL — both OPTIONAL with code defaults (server/core/auto.ts:
         # AUTO_MARKUP_BPS=2500 / 25% on MANAGED Auto inference, separate from the
         # gateway's 15%; AUTO_CLOUD_RUN_CENTS_PER_MIN=1 per-minute compute fee on
