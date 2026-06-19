@@ -27,6 +27,12 @@
 // prevented and this is documented as best-effort.
 import type { EntitlementCheck } from "@agentkitforge/gateway-core";
 import type { StoredSession, TokenStore } from "@agentkitforge/core/market";
+import {
+  marketServiceRoutes,
+  marketServiceAuthHeader,
+  type ServiceLicensedPackageError,
+  type ServiceLicensedPackageResponse
+} from "@agentkitforge/contracts";
 import { loadCoreMarket } from "@/server/core/load-core";
 import { unzipToTree } from "@/server/core/operations";
 import { withEphemeralTree } from "@/server/core/runner";
@@ -213,6 +219,147 @@ export async function resolveProtectedSystemPrompt(
   );
   const trimmed = systemContext.trim();
   return trimmed.length > 0 ? trimmed : DEFAULT_PROMPT;
+}
+
+// ---------------------------------------------------------------------------
+// SERVICE-MODE resolution (no user session) — for the hosted Auto worker path
+// ---------------------------------------------------------------------------
+
+/** Thrown when service-mode protected-kit resolution fails. `code` surfaces the
+ *  Market service endpoint's error enum so the worker path can map "not_entitled"
+ *  to a clear refusal. */
+export class ProtectedKitServiceError extends Error {
+  readonly code: ServiceLicensedPackageError | "service_unconfigured" | "service_request_failed";
+  readonly status?: number;
+  constructor(
+    code: ServiceLicensedPackageError | "service_unconfigured" | "service_request_failed",
+    message: string,
+    status?: number
+  ) {
+    super(message);
+    this.name = "ProtectedKitServiceError";
+    this.code = code;
+    if (status !== undefined) this.status = status;
+  }
+}
+
+/** The shared web-forge↔market-app service key (server-only). Distinct from
+ *  AUTO_WORKER_SERVICE_KEY (worker↔web-forge): the worker NEVER holds this and
+ *  NEVER calls Market directly. */
+function marketServiceKey(): string | undefined {
+  return process.env.MARKET_SERVICE_KEY;
+}
+
+/** Build the Market service licensed-package URL for a slug. Requires a Market
+ *  base URL (per-ref override or AGENTKITMARKET_BASE_URL). */
+function serviceLicensedPackageUrl(slug: string, override?: string): string | undefined {
+  const base = marketBaseUrl(override);
+  if (!base) return undefined;
+  return `${base.replace(/\/+$/, "")}${marketServiceRoutes.licensedPackage(slug)}`;
+}
+
+/**
+ * Fetch a protected kit's licensed package SERVER-TO-SERVICE (no user session)
+ * and assemble the system prompt. Mirrors resolveProtectedSystemPrompt exactly —
+ * unzip the watermarked bytes IN MEMORY, run buildAgentKitContext in an ephemeral
+ * temp dir, discard the bytes — but swaps the user's forwarded WorkOS bearer for
+ * the shared MARKET_SERVICE_KEY plus an EXPLICITLY-ASSERTED `userId`. Entitlement
+ * is STILL enforced Market-side: a non-entitled user yields a 403 → we throw
+ * ProtectedKitServiceError("not_entitled"), refusing the run.
+ *
+ * The bytes/prompt are NEVER persisted and NEVER returned to the browser/Forge —
+ * the caller (worker resolve path) hands the prompt to the worker only over the
+ * existing AUTO_WORKER_SERVICE_KEY internal channel.
+ *
+ * Returns the assembled prompt plus the kit's resolved pricing/onlineOnly so the
+ * caller can apply Phase-A free-kit semantics (a free Market kit needs no
+ * server-side prompt). The bytes are still fetched + assembled in memory in all
+ * cases; the caller decides whether to keep the prompt.
+ *
+ * @throws ProtectedKitServiceError on missing key, request failure, or non-2xx.
+ */
+export interface ServiceResolvedKit {
+  systemPrompt: string;
+  pricing: "free" | "paid";
+  downloadable: boolean;
+  onlineOnly: boolean;
+}
+
+export async function resolveProtectedSystemPromptViaService(
+  userId: string,
+  ref: ProtectedKitRef
+): Promise<ServiceResolvedKit> {
+  const key = marketServiceKey();
+  if (!key || key.length === 0) {
+    throw new ProtectedKitServiceError(
+      "service_unconfigured",
+      "MARKET_SERVICE_KEY is not configured; cannot resolve a protected kit without a user session."
+    );
+  }
+  const url = serviceLicensedPackageUrl(ref.slug, ref.marketBaseUrl);
+  if (!url) {
+    throw new ProtectedKitServiceError(
+      "service_unconfigured",
+      "No Market base URL configured for protected-kit service resolution."
+    );
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        [marketServiceAuthHeader]: key
+      },
+      body: JSON.stringify({
+        userId,
+        ...(ref.kitId ? { kitId: ref.kitId } : {})
+      }),
+      cache: "no-store"
+    });
+  } catch (cause) {
+    throw new ProtectedKitServiceError(
+      "service_request_failed",
+      "The Market service request failed.",
+      undefined
+    );
+  }
+
+  if (!response.ok) {
+    // Surface the endpoint's error code; map 403 to a clear not-entitled refusal.
+    const payload = (await response.json().catch(() => ({}))) as { code?: string };
+    const code = (payload.code as ServiceLicensedPackageError | undefined) ?? "backend_unavailable";
+    const message =
+      code === "not_entitled"
+        ? "The user is not entitled to this protected kit."
+        : `Protected-kit service resolution failed (${code}).`;
+    throw new ProtectedKitServiceError(code, message, response.status);
+  }
+
+  const licensed = (await response.json()) as ServiceLicensedPackageResponse;
+  // Same in-memory assembly as resolveProtectedSystemPrompt: bytes never persisted.
+  const bytes = Buffer.from(licensed.contentBase64, "base64");
+  const tree = await unzipToTree(bytes);
+  const { systemContext } = await withEphemeralTree(tree, async ({ kitRoot, core }) =>
+    core.buildAgentKitContext({
+      kitPath: kitRoot,
+      mode: "all",
+      target: "claude",
+      includePolicies: true,
+      includeTemplates: true,
+      includeWorkflows: true,
+      includePrompts: false
+    })
+  );
+  const trimmed = systemContext.trim();
+  return {
+    systemPrompt: trimmed.length > 0 ? trimmed : DEFAULT_PROMPT,
+    pricing: licensed.pricing,
+    downloadable: licensed.downloadable,
+    onlineOnly: licensed.onlineOnly
+  };
 }
 
 // ---------------------------------------------------------------------------

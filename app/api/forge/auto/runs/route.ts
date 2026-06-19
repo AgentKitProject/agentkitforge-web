@@ -1,0 +1,102 @@
+// /api/forge/auto/runs — AgentKitAuto runs (BEARER auth).
+//
+// Auth: WorkOS device-auth BEARER token (requireForgeUser) — NEVER the AuthKit
+// cookie (CLAUDE.md hard rule #4). The cookie sibling lives at /api/auto/runs.
+//
+//   POST → start a run { kitRef, input, budgetCents (REQUIRED), model? }. The
+//          verified bearer is forwarded into kit-context resolution so a protected
+//          Market kit is fetched + entitlement-checked server-side. Enforces the
+//          approval gate (403 on denial), creates + DISPATCHES the run.
+//   GET  → list the user's runs.
+import { requireForgeUser, ForgeAuthError, parseBearerToken } from "@/lib/forge-auth";
+import {
+  ApprovalDeniedError,
+  AutoValidationError,
+  InsufficientComputeBalanceError,
+  listRuns,
+  parseKitRef,
+  startRun
+} from "@/server/core/auto";
+
+export const dynamic = "force-dynamic";
+
+export async function POST(request: Request) {
+  let userId: string;
+  try {
+    userId = (await requireForgeUser(request)).id;
+  } catch (error) {
+    if (error instanceof ForgeAuthError) {
+      return Response.json({ error: error.code, message: error.message }, { status: error.status });
+    }
+    throw error;
+  }
+  const bearerToken = parseBearerToken(request.headers.get("authorization")) ?? undefined;
+
+  const body = (await request.json().catch(() => ({}))) as {
+    kitRef?: unknown;
+    input?: { prompt?: unknown; files?: unknown };
+    prompt?: unknown;
+    budgetCents?: unknown;
+    model?: unknown;
+  };
+
+  try {
+    const kitRef = parseKitRef(body.kitRef);
+    const prompt =
+      typeof body.input?.prompt === "string"
+        ? body.input.prompt
+        : typeof body.prompt === "string"
+          ? body.prompt
+          : "";
+    const files = Array.isArray(body.input?.files)
+      ? (body.input.files as unknown[]).flatMap((f) =>
+          f && typeof f === "object" && typeof (f as Record<string, unknown>).path === "string"
+            ? [{ path: String((f as Record<string, unknown>).path), content: String((f as Record<string, unknown>).content ?? "") }]
+            : []
+        )
+      : undefined;
+    const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
+    const model = typeof body.model === "string" ? body.model : undefined;
+
+    const run = await startRun({
+      userId,
+      kitRef,
+      prompt,
+      budgetCents,
+      ...(model ? { model } : {}),
+      ...(files ? { files } : {}),
+      // Forge path: forward the already-verified bearer so protected/Market kit
+      // context is fetched + entitlement-checked server-side at run time.
+      kitContext: bearerToken ? { bearerToken } : {}
+    });
+    return Response.json({ id: run.id, status: run.status, createdAt: run.createdAt }, { status: 201 });
+  } catch (error) {
+    if (error instanceof ApprovalDeniedError) {
+      return Response.json({ error: "approval_denied", message: error.message }, { status: 403 });
+    }
+    if (error instanceof AutoValidationError) {
+      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+    }
+    if (error instanceof InsufficientComputeBalanceError) {
+      return Response.json(
+        { error: "insufficient_balance", message: error.message, requiredCents: error.requiredCents },
+        { status: 402 }
+      );
+    }
+    throw error;
+  }
+}
+
+export async function GET(request: Request) {
+  let userId: string;
+  try {
+    userId = (await requireForgeUser(request)).id;
+  } catch (error) {
+    if (error instanceof ForgeAuthError) {
+      return Response.json({ error: error.code, message: error.message }, { status: error.status });
+    }
+    throw error;
+  }
+  const runs = await listRuns(userId);
+  return Response.json({ runs }, { status: 200 });
+}
