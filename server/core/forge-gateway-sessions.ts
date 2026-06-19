@@ -49,9 +49,19 @@ import {
   type SessionStore,
   type ToolDefinition
 } from "@agentkitforge/gateway-core";
+import type { StreamEvent } from "@agentkitforge/gateway-core";
 import { getCreditLedger } from "@/server/core/gateway";
 import { getSessionStore } from "@/server/core/gateway-sessions";
 import { MANAGED_DEFAULT_MODEL } from "@/server/core/managed-models";
+import {
+  classifyKit,
+  createBearerTokenStore,
+  decodeProtectedRef,
+  encodeProtectedRef,
+  redactLeakedPrompt,
+  resolveProtectedSystemPrompt,
+  type ProtectedKitRef
+} from "@/server/core/protected-kits";
 
 /** Default output-token ceiling per provider round-trip for a chat turn. */
 const TURN_MAX_TOKENS = 4096;
@@ -194,11 +204,51 @@ function markupBps(): number | undefined {
  * (entitlement-checked), exactly as the web path loads from the KitStore. That
  * is Phase 3; for now we default-allow and use the client context.
  */
-async function resolveSystemPrompt(session: GatewaySession): Promise<string> {
+async function resolveSystemPrompt(session: GatewaySession, bearerToken?: string): Promise<string> {
+  // PROTECTED Market kit: fetch the kit content server-side from Market
+  // (entitlement-gated, in-memory), NEVER trusting any client-provided context.
+  const protectedRef = decodeProtectedRef(session.systemPromptRef);
+  if (protectedRef) {
+    if (!bearerToken) {
+      // No forwarded bearer at turn time → cannot fetch the entitled package.
+      throw new Error("A signed-in session is required to run this protected kit.");
+    }
+    const store = createBearerTokenStore(bearerToken);
+    return resolveProtectedSystemPrompt(store, protectedRef);
+  }
   const ctx = decodeContextRef(session.systemPromptRef);
   if (ctx) return ctx.systemPrompt;
   // Legacy / non-context ref → safe default (never leak a raw ref to the model).
   return DEFAULT_SYSTEM_PROMPT;
+}
+
+/**
+ * Per-request turn context for the forge path: carries the forwarded bearer into
+ * resolveSystemPrompt (for protected kits) and captures the resolved protected
+ * prompt so the emitter can redact verbatim leaks. Inert for owned/local kits.
+ */
+function makeForgeTurnContext(bearerToken?: string) {
+  let injectedPrompt: string | null = null;
+  let isProtected = false;
+  const resolve = async (session: GatewaySession): Promise<string> => {
+    const prompt = await resolveSystemPrompt(session, bearerToken);
+    if (decodeProtectedRef(session.systemPromptRef)) {
+      isProtected = true;
+      injectedPrompt = prompt;
+    }
+    return prompt;
+  };
+  const guardEvent = (event: StreamEvent): StreamEvent => {
+    if (!isProtected || !injectedPrompt) return event;
+    if (event.type === "text") {
+      return { ...event, delta: redactLeakedPrompt(event.delta, injectedPrompt) };
+    }
+    if (event.type === "tool_use" && typeof event.inputPartial === "string") {
+      return { ...event, inputPartial: redactLeakedPrompt(event.inputPartial, injectedPrompt) };
+    }
+    return event;
+  };
+  return { resolve, guardEvent };
 }
 
 /**
@@ -216,37 +266,59 @@ async function resolveTools(session: GatewaySession): Promise<ToolDefinition[]> 
  * store, credit ledger, and managed provider; wires resolveSystemPrompt +
  * resolveTools for the client-provided-context model.
  */
-function buildRouterDeps(createEmitter: () => SseEmitter, model: string): GatewayRouterDeps {
+function buildRouterDeps(
+  createEmitter: () => SseEmitter,
+  model: string,
+  bearerToken?: string
+): GatewayRouterDeps {
   const sessions = getSessionStore();
   const ledger = getCreditLedger();
   const chatProvider = createManagedAnthropicProvider();
+  // Per-request turn context: threads the forwarded bearer into the protected
+  // server-fetch + redacts verbatim prompt leaks from emitted events.
+  const turnCtx = makeForgeTurnContext(bearerToken);
+  const guardedCreateEmitter = (): SseEmitter => {
+    const inner = createEmitter();
+    return {
+      emit: (event) => inner.emit(turnCtx.guardEvent(event)),
+      close: () => inner.close()
+    };
+  };
   return {
     session: {
       sessions,
       now
-      // entitlementCheck omitted → default allow (owned/local/free kits).
-      // TIER-3 SEAM: inject a Market-entitlement check here for protected kits.
+      // Entitlement is enforced at create (createProtectedForgeSession) — the
+      // router create handler is bypassed for forge, so no check is wired here.
     },
     turn: {
       chatProvider,
       sessions,
       ledger,
-      resolveSystemPrompt,
+      resolveSystemPrompt: turnCtx.resolve,
       resolveTools,
       now,
       model,
       maxTokens: TURN_MAX_TOKENS,
       ...(markupBps() !== undefined ? { markupBps: markupBps() } : {})
     },
-    createEmitter
+    createEmitter: guardedCreateEmitter
   };
 }
 
+/** Thrown by createProtectedForgeSession when the user is not entitled. The
+ *  route maps it to 403 { code: "not_entitled" }. */
+export class ForgeNotEntitledError extends Error {
+  constructor(message = "No active entitlement for this protected kit.") {
+    super(message);
+    this.name = "ForgeNotEntitledError";
+  }
+}
+
 /**
- * Creates a forge session directly (bypassing the router's create handler) so we
- * can capture the generated session id and persist the client-provided context
- * into its `systemPromptRef`. The route layer returns the opaque handle. We never
- * echo the system prompt or tools back to the client beyond the handle.
+ * Creates a forge session for an OWNED/LOCAL kit using the CLIENT-PROVIDED
+ * context (existing behavior). Bypasses the router's create handler so we can
+ * capture the session id + persist the context into `systemPromptRef`.
  */
 export async function createForgeSession(input: {
   userId: string;
@@ -268,16 +340,62 @@ export async function createForgeSession(input: {
 }
 
 /**
+ * Classifies a Market kit for the forge (bearer) create path using the forwarded
+ * WorkOS device-auth token. Returns whether it is PROTECTED. The route uses this
+ * to choose between createForgeSession (owned/local) and createProtectedForgeSession.
+ */
+export async function classifyForgeKit(
+  bearerToken: string,
+  ref: ProtectedKitRef
+): Promise<{ isProtected: boolean; entitled: boolean }> {
+  const store = createBearerTokenStore(bearerToken);
+  const c = await classifyKit(store, ref);
+  return { isProtected: c.isProtected, entitled: c.entitled };
+}
+
+/**
+ * Creates a forge session for a PROTECTED Market kit. ENTITLEMENT-GATED: verifies
+ * the user holds an active entitlement (via the forwarded bearer) and rejects with
+ * ForgeNotEntitledError otherwise. The session's `systemPromptRef` is the protected
+ * marker (NOT client context) so every turn fetches the kit content server-side.
+ * Forces billing:"managed". Any client-provided context is IGNORED.
+ */
+export async function createProtectedForgeSession(input: {
+  userId: string;
+  bearerToken: string;
+  ref: ProtectedKitRef;
+}): Promise<GatewaySession> {
+  const store = createBearerTokenStore(input.bearerToken);
+  const classification = await classifyKit(store, input.ref);
+  if (!classification.entitled) {
+    throw new ForgeNotEntitledError();
+  }
+  const sessions = getSessionStore();
+  return createGatewaySession(
+    { sessions, now },
+    {
+      userId: input.userId,
+      ...(input.ref.kitId ? { kitId: input.ref.kitId } : {}),
+      kitSlug: input.ref.slug,
+      billing: "managed",
+      systemPromptRef: encodeProtectedRef(input.ref)
+    }
+  );
+}
+
+/**
  * Adapts a normalized forge gateway request (turn / tool-result / delete) to
  * gateway-core's router with the forge deps. The route layer resolves `userId`
- * from the bearer token and verifies session ownership BEFORE calling this.
+ * from the bearer token and verifies session ownership BEFORE calling this. The
+ * forwarded bearer is threaded in so protected kits can be fetched server-side.
  */
 export async function handleForgeGatewayRequest(
   req: GatewayRequest,
   createEmitter: () => SseEmitter,
-  model: string = MANAGED_DEFAULT_MODEL
+  model: string = MANAGED_DEFAULT_MODEL,
+  bearerToken?: string
 ): Promise<GatewayResponse> {
-  return routeGatewayRequest(buildRouterDeps(createEmitter, model), req);
+  return routeGatewayRequest(buildRouterDeps(createEmitter, model, bearerToken), req);
 }
 
 /**

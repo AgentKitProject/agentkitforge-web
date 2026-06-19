@@ -29,6 +29,26 @@ export function encodeSseEvent(event: StreamEvent): string {
 }
 
 /**
+ * A canned single-turn SSE response (text + done) with NO provider call and NO
+ * credit hold. Used by the protected-kit leakage guard to refuse an obvious
+ * prompt-extraction attempt without billing the buyer or invoking the model.
+ */
+export function refusalSseResponse(message: string): Response {
+  const encoder = new TextEncoder();
+  const frames = [
+    encodeSseEvent({ type: "text", delta: message }),
+    encodeSseEvent({ type: "done", stopReason: "end_turn" })
+  ];
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    }
+  });
+  return new Response(body, { status: 200, headers: SSE_HEADERS });
+}
+
+/**
  * Runs a gateway router call that may stream, and returns the appropriate
  * Next.js Response:
  *   - For a `json` GatewayResponse (create / delete / pre-stream error such as

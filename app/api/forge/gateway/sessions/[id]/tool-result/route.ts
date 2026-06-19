@@ -8,7 +8,7 @@
 // under the SAME credit hold and streams events back until a natural stop.
 //
 // Session ownership is verified up front, same as /turn.
-import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
+import { requireForgeUser, ForgeAuthError, parseBearerToken } from "@/lib/forge-auth";
 import {
   handleForgeGatewayRequest,
   loadOwnedForgeSession
@@ -38,6 +38,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const body = (await request.json().catch(() => ({}))) as { results?: unknown; model?: string };
   const model = isManagedModel(body.model) ? body.model! : MANAGED_DEFAULT_MODEL;
 
+  // Forwarded device-auth bearer — needed to re-fetch a protected kit prompt
+  // server-side on resume (and to drive the leakage-redaction emitter).
+  const bearerToken = parseBearerToken(request.headers.get("authorization")) ?? undefined;
+
   return streamGatewayResponse((createEmitter) =>
     handleForgeGatewayRequest(
       {
@@ -47,7 +51,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         userId
       },
       createEmitter,
-      model
+      model,
+      bearerToken
     )
   );
 }

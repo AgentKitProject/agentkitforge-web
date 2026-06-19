@@ -13,11 +13,14 @@
 // The client supplies the kit context + tool set because a desktop/CLI kit is
 // LOCAL (not in the web KitStore). Sizes are bounded server-side. Returns the
 // opaque session handle (NEVER the injected system prompt or tools).
-import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
+import { requireForgeUser, ForgeAuthError, parseBearerToken } from "@/lib/forge-auth";
 import {
   buildForgeContext,
+  classifyForgeKit,
   createForgeSession,
-  ForgeContextError
+  createProtectedForgeSession,
+  ForgeContextError,
+  ForgeNotEntitledError
 } from "@/server/core/forge-gateway-sessions";
 import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
 
@@ -41,11 +44,57 @@ export async function POST(request: Request) {
     kitContext?: unknown;
     tools?: unknown;
     model?: string;
+    // Tier-3 PROTECTED (paid / online-only Market) kit selector.
+    source?: string;
+    slug?: string;
+    marketBaseUrl?: string;
   };
 
   // model is recorded for symmetry; the create call doesn't run inference.
   const _model = isManagedModel(body.model) ? body.model! : MANAGED_DEFAULT_MODEL;
   void _model;
+
+  // KIT-TYPE CLASSIFICATION: a Market kit (source/slug) may be PROTECTED. For a
+  // protected kit we IGNORE client-provided context, FORCE managed billing, and
+  // ENTITLEMENT-GATE the session (403 not_entitled when the user lacks one). The
+  // prompt is fetched server-side on every turn — never trusted from the client.
+  if (body.source === "market" && body.slug) {
+    const bearerToken = parseBearerToken(request.headers.get("authorization"));
+    if (!bearerToken) {
+      return Response.json({ code: "not_entitled", message: "Sign-in required for this kit." }, { status: 403 });
+    }
+    const ref = {
+      slug: body.slug,
+      ...(body.kitId ? { kitId: body.kitId } : {}),
+      ...(body.marketBaseUrl ? { marketBaseUrl: body.marketBaseUrl } : {})
+    };
+    const classification = await classifyForgeKit(bearerToken, ref);
+    if (classification.isProtected) {
+      try {
+        const session = await createProtectedForgeSession({ userId, bearerToken, ref });
+        return Response.json(
+          {
+            sessionId: session.sessionId,
+            kitId: session.kitId,
+            billingMode: session.billingMode,
+            // Protected: client context is ignored; no client tools are honored.
+            toolsDeclared: 0,
+            protected: true,
+            createdAt: session.createdAt,
+            expiresAt: session.expiresAt
+          },
+          { status: 201 }
+        );
+      } catch (error) {
+        if (error instanceof ForgeNotEntitledError) {
+          return Response.json({ code: "not_entitled", message: error.message }, { status: 403 });
+        }
+        throw error;
+      }
+    }
+    // Not protected (free Market kit) → falls through to the owned/local path
+    // using whatever context the client supplied.
+  }
 
   let context;
   try {

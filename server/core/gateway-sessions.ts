@@ -40,11 +40,21 @@ import {
   type SseEmitter,
   type SessionStore
 } from "@agentkitforge/gateway-core";
+import type { EntitlementCheck, StreamEvent } from "@agentkitforge/gateway-core";
 import { awsClientEnv } from "@/server/aws-client";
 import { getCreditLedger } from "@/server/core/gateway";
 import { getKitStore } from "@/server/store/index";
 import { withEphemeralTree } from "@/server/core/runner";
 import { MANAGED_DEFAULT_MODEL } from "@/server/core/managed-models";
+import {
+  classifyKit,
+  decodeProtectedRef,
+  encodeProtectedRef,
+  marketEntitlementCheck,
+  redactLeakedPrompt,
+  resolveProtectedSystemPrompt,
+  type ProtectedKitRef
+} from "@/server/core/protected-kits";
 
 /** Default output-token ceiling per provider round-trip for a chat turn. */
 const TURN_MAX_TOKENS = 4096;
@@ -94,7 +104,26 @@ function markupBps(): number | undefined {
  * they own in their own store (Tier-3 entitlement for Market-licensed kits is a
  * later phase — default allow for owned/free kits this pass).
  */
+/**
+ * Lazily loads the cookie-session forwarding store. DYNAMIC import so this
+ * (cookie/AuthKit-coupled) module is NEVER pulled into the FORGE bearer route's
+ * import graph (CLAUDE.md hard rule #4) — the forge path imports getSessionStore
+ * from this file but must not transitively load AuthKit.
+ */
+async function forwardingStore() {
+  const { createForwardingStore } = await import("@/server/core/import-ops");
+  return createForwardingStore();
+}
+
 async function resolveSystemPrompt(session: GatewaySession): Promise<string> {
+  // PROTECTED Market kit: the session's systemPromptRef tags it as Tier-3. Fetch
+  // the kit content server-side from Market (entitlement-gated, in-memory) — NEVER
+  // from the KitStore and NEVER from client context.
+  const protectedRef = decodeProtectedRef(session.systemPromptRef);
+  if (protectedRef) {
+    const store = await forwardingStore();
+    return resolveProtectedSystemPrompt(store, protectedRef);
+  }
   if (!session.kitId) {
     // Raw / promptless session — no kit content to inject.
     return "You are a helpful assistant running an Agent Kit.";
@@ -119,36 +148,89 @@ async function resolveSystemPrompt(session: GatewaySession): Promise<string> {
 }
 
 /**
+ * Wraps `resolveSystemPrompt` so the resolved prompt for a protected session is
+ * captured (in a closure cell) and used by the leakage-redaction emitter. For
+ * non-protected sessions the cell stays null and no redaction is applied.
+ */
+function makeProtectedTurnContext() {
+  let injectedPrompt: string | null = null;
+  let isProtected = false;
+  const resolve = async (session: GatewaySession): Promise<string> => {
+    const prompt = await resolveSystemPrompt(session);
+    if (decodeProtectedRef(session.systemPromptRef)) {
+      isProtected = true;
+      injectedPrompt = prompt;
+    }
+    return prompt;
+  };
+  /** Redacts long verbatim chunks of the injected prompt from emitted text /
+   *  tool-call args (best-effort leakage guard). No-op for non-protected turns. */
+  const guardEvent = (event: StreamEvent): StreamEvent => {
+    if (!isProtected || !injectedPrompt) return event;
+    if (event.type === "text") {
+      return { ...event, delta: redactLeakedPrompt(event.delta, injectedPrompt) };
+    }
+    if (event.type === "tool_use" && typeof event.inputPartial === "string") {
+      return { ...event, inputPartial: redactLeakedPrompt(event.inputPartial, injectedPrompt) };
+    }
+    return event;
+  };
+  return { resolve, guardEvent };
+}
+
+/**
  * Builds the GatewayRouterDeps for one request. `createEmitter` is supplied by
  * the route adapter (it knows how to write SSE chunks to its ReadableStream).
  *
  * @param model  The managed model id selected by the caller (validated by the
  *               route); falls back to MANAGED_DEFAULT_MODEL.
  */
-function buildRouterDeps(createEmitter: () => SseEmitter, model: string): GatewayRouterDeps {
+/** Per-create options. Carries an optional Market entitlement gate, supplied by
+ *  the route only for a PROTECTED kit. */
+export interface GatewayCreateOpts {
+  entitlementCheck?: EntitlementCheck;
+}
+
+function buildRouterDeps(
+  createEmitter: () => SseEmitter,
+  model: string,
+  opts?: GatewayCreateOpts
+): GatewayRouterDeps {
   const sessions = getSessionStore();
   const ledger = getCreditLedger();
   // The managed provider reads the PLATFORM ANTHROPIC_API_KEY. When unset, the
   // factory throws inertly; runStreamingTurn surfaces it as an `error` event.
   const chatProvider = createManagedAnthropicProvider();
+  // Per-request turn context: captures the protected prompt during resolve and
+  // redacts verbatim leaks from emitted events. Inert for non-protected turns.
+  const turnCtx = makeProtectedTurnContext();
+  const guardedCreateEmitter = (): SseEmitter => {
+    const inner = createEmitter();
+    return {
+      emit: (event) => inner.emit(turnCtx.guardEvent(event)),
+      close: () => inner.close()
+    };
+  };
   return {
     session: {
       sessions,
-      now
-      // entitlementCheck omitted → default allow (owned/free kits).
+      now,
+      // Tier-3: a Market entitlement check is injected ONLY for protected kits at
+      // create time. Omitted for owned/free kits → default allow.
+      ...(opts?.entitlementCheck ? { entitlementCheck: opts.entitlementCheck } : {})
     },
     turn: {
       chatProvider,
       sessions,
       ledger,
-      resolveSystemPrompt,
+      resolveSystemPrompt: turnCtx.resolve,
       // resolveTools omitted → no tools this pass (conversational-only).
       now,
       model,
       maxTokens: TURN_MAX_TOKENS,
       ...(markupBps() !== undefined ? { markupBps: markupBps() } : {})
     },
-    createEmitter
+    createEmitter: guardedCreateEmitter
   };
 }
 
@@ -156,13 +238,44 @@ function buildRouterDeps(createEmitter: () => SseEmitter, model: string): Gatewa
  * Adapts a normalized gateway request to gateway-core's router with this app's
  * deps. The route layer resolves `userId` from the AuthKit session and verifies
  * session ownership BEFORE calling this for /turn, /tool-result, and DELETE.
+ *
+ * `opts.entitlementCheck` is supplied ONLY by the create path for a PROTECTED
+ * Market kit (the route classifies the kit first). All other requests / kinds
+ * leave it unset → default allow.
  */
 export async function handleGatewayRequest(
   req: GatewayRequest,
   createEmitter: () => SseEmitter,
-  model: string = MANAGED_DEFAULT_MODEL
+  model: string = MANAGED_DEFAULT_MODEL,
+  opts?: GatewayCreateOpts
 ): Promise<GatewayResponse> {
-  return routeGatewayRequest(buildRouterDeps(createEmitter, model), req);
+  return routeGatewayRequest(buildRouterDeps(createEmitter, model, opts), req);
+}
+
+/**
+ * Classifies a kit for the web (cookie) create path and returns what the route
+ * needs to build the create request:
+ *   - PROTECTED (paid / online-only): returns a `protected:` systemPromptRef +
+ *     an entitlement check to inject (→ 403 not_entitled when not entitled), and
+ *     forces managed billing. Any client-provided context is IGNORED.
+ *   - OWNED/free: returns nothing extra → existing KitStore behavior.
+ *
+ * `slug` is required to talk to Market; the web route passes kitId+slug from the
+ * catalog selection.
+ */
+export async function classifyWebKit(ref: ProtectedKitRef): Promise<{
+  isProtected: boolean;
+  systemPromptRef?: string;
+  entitlementCheck?: EntitlementCheck;
+}> {
+  const store = await forwardingStore();
+  const classification = await classifyKit(store, ref);
+  if (!classification.isProtected) return { isProtected: false };
+  return {
+    isProtected: true,
+    systemPromptRef: encodeProtectedRef(ref),
+    entitlementCheck: marketEntitlementCheck(() => forwardingStore(), ref)
+  };
 }
 
 /**

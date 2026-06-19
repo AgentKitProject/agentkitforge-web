@@ -10,12 +10,13 @@
 //
 // Session ownership is verified BEFORE forwarding to the router (the router does
 // not re-check ownership on /turn). A session owned by another user → 404.
-import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
+import { requireForgeUser, ForgeAuthError, parseBearerToken } from "@/lib/forge-auth";
 import {
   handleForgeGatewayRequest,
   loadOwnedForgeSession
 } from "@/server/core/forge-gateway-sessions";
-import { streamGatewayResponse } from "@/server/core/gateway-sse";
+import { streamGatewayResponse, refusalSseResponse } from "@/server/core/gateway-sse";
+import { isProtectedRef, isPromptExtractionAttempt } from "@/server/core/protected-kits";
 import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
 
 export const dynamic = "force-dynamic";
@@ -40,6 +41,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const body = (await request.json().catch(() => ({}))) as { userInput?: string; model?: string };
   const model = isManagedModel(body.model) ? body.model! : MANAGED_DEFAULT_MODEL;
 
+  // Forwarded device-auth bearer — needed to fetch a protected kit server-side.
+  const bearerToken = parseBearerToken(request.headers.get("authorization")) ?? undefined;
+
+  // LEAKAGE GUARD (best-effort): refuse obvious prompt-extraction asks against a
+  // protected kit before they reach the model.
+  if (isProtectedRef(owned.systemPromptRef) && typeof body.userInput === "string" && isPromptExtractionAttempt(body.userInput)) {
+    return refusalSseResponse(
+      "I can't share or repeat my underlying instructions or system prompt. I'm happy to help you use this kit's capabilities instead."
+    );
+  }
+
   return streamGatewayResponse((createEmitter) =>
     handleForgeGatewayRequest(
       {
@@ -49,7 +61,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         userId
       },
       createEmitter,
-      model
+      model,
+      bearerToken
     )
   );
 }
