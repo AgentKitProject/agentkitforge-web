@@ -7,6 +7,9 @@ import * as ecs from "aws-cdk-lib/aws-ecs";
 import * as ecr from "aws-cdk-lib/aws-ecr";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as logs from "aws-cdk-lib/aws-logs";
+import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as events from "aws-cdk-lib/aws-events";
+import * as targets from "aws-cdk-lib/aws-events-targets";
 
 /**
  * Hosted (AWS) backing store for the agentkitforge-web `KitStore`/`UserSettingsStore`
@@ -137,6 +140,32 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL
     });
 
+    // AutoSchedules (Phase B) — standing cron schedules. Key schema MUST mirror
+    // auto-core's aws adapter (src/adapters/aws DynamoAutoScheduleRepository):
+    //   - PK `id`.
+    //   - GSI `userId-index` (PK gsiUserId)        — listSchedulesByUser.
+    //   - GSI `dueIndex`     (PK gsiDue, SK nextRunAt) — listDueSchedules: a single
+    //     Query on gsiDue="1" (a constant partition present only on ENABLED rows)
+    //     with KeyCondition nextRunAt <= now. Disabled schedules drop out of the
+    //     index (adapter omits gsiDue), so the per-minute sweep scans no extra rows.
+    const autoSchedulesTable = new dynamodb.Table(this, "AutoSchedulesTable", {
+      partitionKey: { name: "id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN
+    });
+    autoSchedulesTable.addGlobalSecondaryIndex({
+      indexName: "userId-index",
+      partitionKey: { name: "gsiUserId", type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+    autoSchedulesTable.addGlobalSecondaryIndex({
+      indexName: "dueIndex",
+      partitionKey: { name: "gsiDue", type: dynamodb.AttributeType.STRING },
+      sortKey: { name: "nextRunAt", type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+
     // ---- 2. ECR repository ---------------------------------------------------
     const workerRepo = new ecr.Repository(this, "AutoWorkerRepo", {
       repositoryName: "agentkit-auto-worker",
@@ -211,6 +240,10 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     // Run state + approvals (grants auto-include index ARNs).
     autoRunsTable.grantReadWriteData(taskRole);
     autoApprovalsTable.grantReadWriteData(taskRole);
+    // Schedules (Phase B): the worker itself doesn't sweep, but the sweep runs in
+    // the web app under the SSR user; the task role gets RW for parity + any future
+    // worker-side schedule reads. Index ARNs are auto-included.
+    autoSchedulesTable.grantReadWriteData(taskRole);
     // Gateway credit ledger — the worker debits during a run.
     gatewayCreditAccounts.grantReadWriteData(taskRole);
     gatewayCreditTxns.grantReadWriteData(taskRole);
@@ -238,6 +271,7 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     const containerEnv: { [key: string]: string } = {
       AUTO_RUNS_TABLE: autoRunsTable.tableName,
       AUTO_APPROVALS_TABLE: autoApprovalsTable.tableName,
+      AUTO_SCHEDULES_TABLE: autoSchedulesTable.tableName,
       GATEWAY_CREDIT_ACCOUNTS_TABLE: gatewayCreditAccounts.tableName,
       GATEWAY_CREDIT_TXNS_TABLE: gatewayCreditTxns.tableName,
       GATEWAY_CREDIT_HOLDS_TABLE: gatewayCreditHolds.tableName,
@@ -306,11 +340,76 @@ export class AgentKitForgeWebStack extends cdk.Stack {
             autoRunsTable.tableArn,
             `${autoRunsTable.tableArn}/index/*`,
             autoApprovalsTable.tableArn,
-            `${autoApprovalsTable.tableArn}/index/*`
+            `${autoApprovalsTable.tableArn}/index/*`,
+            // Phase B: the SSR app does schedule CRUD + the per-minute sweep
+            // (listDueSchedules over dueIndex), so it needs RW on the table + GSIs.
+            autoSchedulesTable.tableArn,
+            `${autoSchedulesTable.tableArn}/index/*`
           ]
         })
       ]
     });
+
+    // ---- 6b. Per-minute schedule-sweep trigger (Phase B) ---------------------
+    // An EventBridge rule fires every minute and invokes a tiny Lambda that does a
+    // single HTTPS POST to the web app's internal sweep endpoint with the shared
+    // service key. The web app (SSR) then runs auto-core's runDueSchedules, which
+    // selects + dispatches due schedules onto Fargate. The Lambda is intentionally
+    // dependency-free (Node 20 global fetch), needs only outbound internet (the
+    // default Lambda networking) + CloudWatch logs, and carries the URL + key in
+    // its env from CDK context — the SAME context-secret pattern the task def uses
+    // for anthropicApiKey / autoWorkerServiceKey (never hardcoded).
+    //
+    // COST: a 1-minute schedule is ~43,800 invocations/month of a sub-second, 128MB
+    // function — trivially within free tier / a few cents/month.
+    const sweepLogGroup = new logs.LogGroup(this, "AutoScheduleSweepLogs", {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY
+    });
+    const sweepLambda = new lambda.Function(this, "AutoScheduleSweepFn", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 128,
+      logGroup: sweepLogGroup,
+      environment: {
+        WEB_FORGE_INTERNAL_URL: webForgeInternalUrl,
+        // AUTO_WORKER_SERVICE_KEY: same shared internal trust-boundary key the
+        // resolve-context + sweep endpoints verify. Sourced from CDK context only
+        // (never hardcoded); empty string when contextless so synth still works —
+        // the endpoint then returns 401 until the real key is provisioned.
+        AUTO_WORKER_SERVICE_KEY: autoWorkerServiceKey ?? ""
+      },
+      code: lambda.Code.fromInline(
+        [
+          "exports.handler = async () => {",
+          "  const base = process.env.WEB_FORGE_INTERNAL_URL;",
+          "  const key = process.env.AUTO_WORKER_SERVICE_KEY;",
+          "  if (!base || !key) {",
+          "    console.error('sweep: missing WEB_FORGE_INTERNAL_URL or service key');",
+          "    return { ok: false, reason: 'unconfigured' };",
+          "  }",
+          "  const url = base.replace(/\\/$/, '') + '/api/internal/auto/sweep';",
+          "  const res = await fetch(url, {",
+          "    method: 'POST',",
+          "    headers: { 'x-service-key': key, 'content-type': 'application/json' },",
+          "    body: '{}'",
+          "  });",
+          "  const text = await res.text().catch(() => '');",
+          // Never log the service key; log only status + a short body snippet.
+          "  console.info('sweep status=' + res.status + ' body=' + text.slice(0, 200));",
+          "  if (!res.ok) throw new Error('sweep failed: HTTP ' + res.status);",
+          "  return { ok: true, status: res.status };",
+          "};"
+        ].join("\n")
+      )
+    });
+
+    const sweepRule = new events.Rule(this, "AutoScheduleSweepRule", {
+      schedule: events.Schedule.rate(cdk.Duration.minutes(1)),
+      description: "Per-minute AgentKitAuto schedule sweep trigger (Phase B)"
+    });
+    sweepRule.addTarget(new targets.LambdaFunction(sweepLambda));
 
     // ---- 7. CfnOutputs -------------------------------------------------------
     new cdk.CfnOutput(this, "AutoRunsTableOut", {
@@ -320,6 +419,18 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     new cdk.CfnOutput(this, "AutoApprovalsTableOut", {
       value: autoApprovalsTable.tableName,
       description: "AUTO_APPROVALS_TABLE"
+    });
+    new cdk.CfnOutput(this, "AutoSchedulesTableOut", {
+      value: autoSchedulesTable.tableName,
+      description: "AUTO_SCHEDULES_TABLE"
+    });
+    new cdk.CfnOutput(this, "AutoScheduleSweepRuleOut", {
+      value: sweepRule.ruleName,
+      description: "AUTO_SCHEDULE_SWEEP_RULE"
+    });
+    new cdk.CfnOutput(this, "AutoScheduleSweepFnOut", {
+      value: sweepLambda.functionName,
+      description: "AUTO_SCHEDULE_SWEEP_FUNCTION"
     });
     new cdk.CfnOutput(this, "AutoEcsCluster", {
       value: cluster.clusterName,
