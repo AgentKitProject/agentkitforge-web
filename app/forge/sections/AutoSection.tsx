@@ -17,8 +17,16 @@
 // All HTTP is the cookie path (/api/auto/*) via fetch with credentials — this is
 // the browser UI; the bearer path (/api/forge/auto/*) is for desktop/CLI clients.
 import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, Field, Input, Select, Textarea, brandVars } from "@agentkitforge/ui";
 import type { MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
+import { AutoLogo } from "./AutoLogo";
+
+// AgentKitAuto accent. Wrapping the section in brandVars(AUTO_GREEN) re-themes
+// every framework primitive (buttons, badges, focus rings, active nav) inside
+// it to Auto green, while the rest of the app stays Forge indigo.
+const AUTO_GREEN = "#16a34a";
+const AUTO_GREEN_STRONG = "#15803d";
 
 // Phase-A sandbox tools the user can authorize. NO run_command (no autonomous shell).
 const SANDBOX_TOOLS = ["read_file", "list_dir", "write_file"] as const;
@@ -317,7 +325,16 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   const kitLabel = (id?: string) => kits.find((k) => k.kitId === id)?.name ?? id ?? "(unknown kit)";
 
   return (
-    <div className="form-layout">
+    <div style={brandVars(AUTO_GREEN, AUTO_GREEN_STRONG)}>
+      {/* Auto section header: brand logo + name + green accent */}
+      <header style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 22 }}>
+        <AutoLogo size={40} />
+        <div style={{ display: "grid", gap: 2 }}>
+          <strong style={{ fontSize: "1.15rem", lineHeight: 1.1 }}>AgentKitAuto</strong>
+          <span className="eyebrow">Autonomous runs</span>
+        </div>
+      </header>
+      <div className="form-layout">
       <div className="form-panel">
         {/* ---- Standing approval ---- */}
         <h3>Authorize a kit</h3>
@@ -325,24 +342,23 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
           A standing approval lets Auto run a kit autonomously (no per-step confirm). The tool allowlist is your
           consent; Auto can only use file tools confined to a per-run workspace. There is no autonomous shell.
         </p>
-        <div className="field">
-          <label>Kit</label>
-          <select value={apprKitId} onChange={(e) => setApprKitId(e.target.value)}>
+        <Field label="Kit">
+          <Select value={apprKitId} onChange={(e) => setApprKitId(e.target.value)}>
             <option value="">Select a kit…</option>
             {kits.map((k) => (
               <option key={k.kitId} value={k.kitId}>
                 {k.name}
               </option>
             ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Allowed tools</label>
+          </Select>
+        </Field>
+        <Field label="Allowed tools">
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
             {SANDBOX_TOOLS.map((t) => (
               <label key={t} style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
                 <input
                   type="checkbox"
+                  style={{ width: "auto", minHeight: 0 }}
                   checked={apprTools.includes(t)}
                   onChange={(e) =>
                     setApprTools((prev) => (e.target.checked ? [...prev, t] : prev.filter((x) => x !== t)))
@@ -352,14 +368,13 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
               </label>
             ))}
           </div>
-        </div>
-        <div className="field">
-          <label>Max budget per run (USD)</label>
-          <input type="number" min="0.01" step="0.01" value={apprBudgetUsd} onChange={(e) => setApprBudgetUsd(e.target.value)} />
-        </div>
-        <button className="primary-button" disabled={apprBusy} onClick={() => void submitApproval()}>
+        </Field>
+        <Field label="Max budget per run (USD)">
+          <Input type="number" min="0.01" step="0.01" value={apprBudgetUsd} onChange={(e) => setApprBudgetUsd(e.target.value)} />
+        </Field>
+        <Button disabled={apprBusy} loading={apprBusy} onClick={() => void submitApproval()}>
           {apprBusy ? "Creating…" : "Create approval"}
-        </button>
+        </Button>
 
         <div className="results-panel" style={{ marginTop: 16 }}>
           <h4 style={{ marginTop: 0 }}>Active approvals</h4>
@@ -375,9 +390,9 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                       {a.toolAllowlist.join(", ") || "no tools"} · ceiling {centsToUsd(a.maxBudgetCents)}
                     </div>
                   </div>
-                  <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void revoke(a.id)}>
+                  <Button variant="secondary" size="sm" onClick={() => void revoke(a.id)}>
                     Revoke
-                  </button>
+                  </Button>
                 </div>
               </div>
             ))
@@ -386,9 +401,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
         {/* ---- Start a run ---- */}
         <h3 style={{ marginTop: 24 }}>Start a run</h3>
-        <div className="field">
-          <label>Kit (must have an approval)</label>
-          <select value={runKitId} onChange={(e) => setRunKitId(e.target.value)}>
+        <Field label="Kit (must have an approval)">
+          <Select value={runKitId} onChange={(e) => setRunKitId(e.target.value)}>
             <option value="">Select a kit…</option>
             {kits
               .filter((k) => kitsWithApproval.includes(k.kitId))
@@ -397,19 +411,17 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                   {k.name}
                 </option>
               ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Task</label>
-          <textarea rows={4} value={runPrompt} onChange={(e) => setRunPrompt(e.target.value)} placeholder="What should the kit do, end to end?" />
-        </div>
-        <div className="field">
-          <label>This run&apos;s budget (USD, required)</label>
-          <input type="number" min="0.01" step="0.01" value={runBudgetUsd} onChange={(e) => setRunBudgetUsd(e.target.value)} />
-        </div>
-        <button className="primary-button" disabled={runBusy} onClick={() => void startRun()}>
+          </Select>
+        </Field>
+        <Field label="Task">
+          <Textarea rows={4} value={runPrompt} onChange={(e) => setRunPrompt(e.target.value)} placeholder="What should the kit do, end to end?" />
+        </Field>
+        <Field label="This run's budget (USD, required)">
+          <Input type="number" min="0.01" step="0.01" value={runBudgetUsd} onChange={(e) => setRunBudgetUsd(e.target.value)} />
+        </Field>
+        <Button disabled={runBusy} loading={runBusy} onClick={() => void startRun()}>
           {runBusy ? "Starting…" : "Start run"}
-        </button>
+        </Button>
 
         {/* ---- Schedules (Phase B) ---- */}
         <h3 style={{ marginTop: 24 }}>Schedules</h3>
@@ -417,9 +429,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
           A schedule fires a run automatically on a cron cadence, under the kit&apos;s standing approval and a
           per-run budget. Each fire is still gated by the approval — a schedule never widens consent.
         </p>
-        <div className="field">
-          <label>Kit (must have an approval)</label>
-          <select value={schedKitId} onChange={(e) => setSchedKitId(e.target.value)}>
+        <Field label="Kit (must have an approval)">
+          <Select value={schedKitId} onChange={(e) => setSchedKitId(e.target.value)}>
             <option value="">Select a kit…</option>
             {kits
               .filter((k) => kitsWithApproval.includes(k.kitId))
@@ -428,27 +439,23 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                   {k.name}
                 </option>
               ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Cron (minute hour dom month dow)</label>
-          <input type="text" value={schedCron} onChange={(e) => setSchedCron(e.target.value)} placeholder="0 9 * * *" />
-        </div>
-        <div className="field">
-          <label>Timezone (IANA)</label>
-          <input type="text" value={schedTz} onChange={(e) => setSchedTz(e.target.value)} placeholder="UTC" />
-        </div>
-        <div className="field">
-          <label>Task</label>
-          <textarea rows={3} value={schedPrompt} onChange={(e) => setSchedPrompt(e.target.value)} placeholder="What should the kit do on each run?" />
-        </div>
-        <div className="field">
-          <label>Per-run budget (USD, required)</label>
-          <input type="number" min="0.01" step="0.01" value={schedBudgetUsd} onChange={(e) => setSchedBudgetUsd(e.target.value)} />
-        </div>
-        <button className="primary-button" disabled={schedBusy} onClick={() => void createSchedule()}>
+          </Select>
+        </Field>
+        <Field label="Cron (minute hour dom month dow)">
+          <Input type="text" value={schedCron} onChange={(e) => setSchedCron(e.target.value)} placeholder="0 9 * * *" />
+        </Field>
+        <Field label="Timezone (IANA)">
+          <Input type="text" value={schedTz} onChange={(e) => setSchedTz(e.target.value)} placeholder="UTC" />
+        </Field>
+        <Field label="Task">
+          <Textarea rows={3} value={schedPrompt} onChange={(e) => setSchedPrompt(e.target.value)} placeholder="What should the kit do on each run?" />
+        </Field>
+        <Field label="Per-run budget (USD, required)">
+          <Input type="number" min="0.01" step="0.01" value={schedBudgetUsd} onChange={(e) => setSchedBudgetUsd(e.target.value)} />
+        </Field>
+        <Button disabled={schedBusy} loading={schedBusy} onClick={() => void createSchedule()}>
           {schedBusy ? "Creating…" : "Create schedule"}
-        </button>
+        </Button>
 
         <div className="results-panel" style={{ marginTop: 16 }}>
           <h4 style={{ marginTop: 0 }}>Active schedules</h4>
@@ -474,9 +481,9 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                       <input type="checkbox" checked={s.enabled} onChange={() => void toggleSchedule(s)} />
                       {s.enabled ? "on" : "off"}
                     </label>
-                    <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void removeSchedule(s.id)}>
+                    <Button variant="secondary" size="sm" onClick={() => void removeSchedule(s.id)}>
                       Delete
-                    </button>
+                    </Button>
                   </div>
                 </div>
               </div>
@@ -498,9 +505,9 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
               style={{ marginBottom: 8, padding: "8px 12px", cursor: "pointer", outline: openRunId === r.id ? "1px solid var(--color-accent)" : "none" }}
               onClick={() => setOpenRunId(r.id)}
             >
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: "0.85em" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center", fontSize: "0.85em" }}>
                 <strong>{kitLabel(r.kitRef.localKitId)}</strong>
-                <span style={{ color: ACTIVE.has(r.status) ? "var(--color-accent)" : "var(--color-text-secondary)" }}>{r.status}</span>
+                <Badge tone={ACTIVE.has(r.status) ? "brand" : "neutral"}>{r.status}</Badge>
               </div>
               <div style={{ fontSize: "0.78em", color: "var(--color-text-secondary)" }}>
                 {centsToUsd(r.spentCents)} / {centsToUsd(r.budgetCents)} · {new Date(r.createdAt).toLocaleString()}
@@ -514,9 +521,9 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <h4 style={{ margin: 0 }}>Run detail</h4>
               {ACTIVE.has(openRun.status) && (
-                <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void cancelRun(openRun.id)}>
+                <Button variant="secondary" size="sm" onClick={() => void cancelRun(openRun.id)}>
                   Cancel
-                </button>
+                </Button>
               )}
             </div>
             <p style={{ fontSize: "0.82em", color: "var(--color-text-secondary)", margin: "6px 0" }}>
@@ -559,6 +566,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
             )}
           </div>
         )}
+      </div>
       </div>
     </div>
   );
