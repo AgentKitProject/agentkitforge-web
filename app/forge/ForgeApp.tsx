@@ -7,7 +7,9 @@
 // each section to a dedicated component under ./sections/. The WebForgeClient
 // seam is unchanged — all HTTP calls still go through forge-client/web-client.ts.
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AppShell, SidebarAccount, type SidebarNavItem } from "@agentkitforge/ui";
 import { getForgeClient } from "@/forge-client";
 import type { MyKitEntry } from "@/forge-client";
 import {
@@ -23,6 +25,7 @@ import {
   UploadIcon,
   UserIcon
 } from "./icons";
+import { AutoLogo } from "./sections/AutoLogo";
 import type { Favorite, SessionUser, UsageInfo } from "./sections/shared";
 import { errMsg, fmtBytes } from "./sections/shared";
 import { MyKits } from "./sections/MyKits";
@@ -54,18 +57,24 @@ type SectionId =
   | "account"
   | "about";
 
-const NAV: { id: SectionId; label: string; Icon: typeof PackageIcon }[] = [
-  { id: "my-kits", label: "My Kits", Icon: PackageIcon },
-  { id: "build", label: "Build", Icon: HammerIcon },
-  { id: "use", label: "Use", Icon: PlayIcon },
-  { id: "run", label: "Run / Chat", Icon: SparklesIcon },
-  { id: "auto", label: "Auto", Icon: PlayIcon },
-  { id: "import", label: "Import", Icon: ImportIcon },
-  { id: "package-export", label: "Package / Export", Icon: ExportIcon },
-  { id: "install-targets", label: "Install Targets", Icon: PlugIcon },
-  { id: "market-submit", label: "Submit to Market", Icon: UploadIcon },
-  { id: "settings", label: "Settings", Icon: SettingsIcon },
-  { id: "about", label: "About", Icon: InfoIcon }
+// Auto green — the AgentKitAuto accent. Used both as the Auto nav icon's
+// container brand and (via brandVars) to re-theme the Auto section content.
+const AUTO_GREEN = "#16a34a";
+
+type NavDef = { id: SectionId; label: string; icon: ReactNode };
+
+const NAV: NavDef[] = [
+  { id: "my-kits", label: "My Kits", icon: <PackageIcon size={18} /> },
+  { id: "build", label: "Build", icon: <HammerIcon size={18} /> },
+  { id: "use", label: "Use", icon: <PlayIcon size={18} /> },
+  { id: "run", label: "Run / Chat", icon: <SparklesIcon size={18} /> },
+  { id: "auto", label: "Auto", icon: <AutoLogo size={18} title="" aria-hidden /> },
+  { id: "import", label: "Import", icon: <ImportIcon size={18} /> },
+  { id: "package-export", label: "Package / Export", icon: <ExportIcon size={18} /> },
+  { id: "install-targets", label: "Install Targets", icon: <PlugIcon size={18} /> },
+  { id: "market-submit", label: "Submit to Market", icon: <UploadIcon size={18} /> },
+  { id: "settings", label: "Settings", icon: <SettingsIcon size={18} /> },
+  { id: "about", label: "About", icon: <InfoIcon size={18} /> }
 ];
 
 const SECTION_TITLES: Record<SectionId, { eyebrow: string; title: string }> = {
@@ -161,83 +170,88 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
     ? { eyebrow: "Edit", title: "Kit editor" }
     : SECTION_TITLES[section];
 
+  // Declarative nav for the framework AppShell. Selecting a section also clears
+  // any open kit editor (preserving the original click behavior).
+  const navItems: SidebarNavItem[] = NAV.map(({ id, label, icon }) => ({
+    label,
+    icon,
+    active: section === id && !openKitId,
+    onClick: () => {
+      setOpenKitId(null);
+      setSection(id);
+    }
+  }));
+
+  // Theme toggle + account block pinned to the bottom of the rail.
+  const sidebarFooter = (
+    <button
+      type="button"
+      className="ak-nav-item"
+      style={{ fontSize: "0.82em", opacity: 0.8 }}
+      onClick={toggleTheme}
+      title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+    >
+      <span className="ak-nav-item__icon" aria-hidden="true">
+        {theme === "dark" ? <SunIcon size={16} /> : <MoonIcon size={16} />}
+      </span>
+      <span className="ak-nav-item__label">{theme === "dark" ? "Light mode" : "Dark mode"}</span>
+    </button>
+  );
+
+  const usageNode =
+    usage && !openKitId ? (
+      <div style={{ fontSize: "0.8em", color: "var(--color-text-secondary)", textAlign: "right" }}>
+        {usage.kitCount}/{usage.kitLimit} kits · {fmtBytes(usage.bytes)}/{fmtBytes(usage.byteLimit)}
+        {usage.kitCount >= usage.kitLimit && <span style={{ color: "var(--color-error)", marginLeft: 6 }}>Limit reached</span>}
+      </div>
+    ) : null;
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark">
+    <>
+      <AppShell
+        logo={
+          <span
+            style={{
+              display: "grid",
+              placeItems: "center",
+              width: 38,
+              height: 38,
+              color: "var(--ak-text)",
+              background: "var(--ak-sidebar-active)",
+              borderRadius: "var(--ak-radius-nav)"
+            }}
+            aria-hidden="true"
+          >
             <SparklesIcon size={22} />
           </span>
-          <span className="brand-name">
-            AgentKit<span>Forge</span>
-          </span>
-        </div>
-        <nav className="nav-list">
-          {NAV.map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              className={`nav-item ${section === id && !openKitId ? "active" : ""}`}
-              onClick={() => {
-                setOpenKitId(null);
-                setSection(id);
-              }}
-            >
-              <Icon size={18} />
-              <span>{label}</span>
-            </button>
-          ))}
-        </nav>
-
-        {/* Theme toggle */}
-        <button
-          type="button"
-          className="nav-item"
-          style={{ marginTop: "auto", fontSize: "0.82em", opacity: 0.75 }}
-          onClick={toggleTheme}
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-        >
-          {theme === "dark" ? (
-            <SunIcon size={16} />
-          ) : (
-            <MoonIcon size={16} />
-          )}
-          <span>{theme === "dark" ? "Light mode" : "Dark mode"}</span>
-        </button>
-
-        <button
-          type="button"
-          className={`sidebar-account-block ${section === "account" && !openKitId ? "active" : ""}`}
-          onClick={() => {
-            setOpenKitId(null);
-            setSection("account");
-          }}
-        >
-          <span className="sidebar-account-avatar">{initials(user?.email) || <UserIcon size={18} />}</span>
-          <span className="sidebar-account-copy">
-            <span className="sidebar-account-name">{user?.email ?? "Signed in"}</span>
-            <span className="sidebar-account-status">AgentKitProject account</span>
-          </span>
-        </button>
-      </aside>
-
-      <div className="main">
-        <header className="topbar">
-          <div>
-            <p className="eyebrow">{heading.eyebrow}</p>
-            <h1>{heading.title}</h1>
-          </div>
-          {/* Usage in topbar when present */}
-          {usage && !openKitId && (
-            <div style={{ fontSize: "0.8em", color: "var(--color-text-secondary)", textAlign: "right" }}>
-              {usage.kitCount}/{usage.kitLimit} kits · {fmtBytes(usage.bytes)}/{fmtBytes(usage.byteLimit)}
-              {usage.kitCount >= usage.kitLimit && <span style={{ color: "var(--color-error)", marginLeft: 6 }}>Limit reached</span>}
-            </div>
-          )}
-        </header>
-
-        <section className="content">
-          {openKitId ? (
+        }
+        brand={
+          <>
+            AgentKit<span style={{ color: "var(--ak-brand)" }}>Forge</span>
+          </>
+        }
+        brandSubtitle="Web Forge"
+        brandAccent="#4f46e5"
+        nav={navItems}
+        account={
+          <SidebarAccount
+            name={user?.email ?? "Signed in"}
+            status="AgentKitProject account"
+            initials={initials(user?.email)}
+            avatar={initials(user?.email) ? undefined : <UserIcon size={18} />}
+            onClick={() => {
+              setOpenKitId(null);
+              setSection("account");
+            }}
+            className={section === "account" && !openKitId ? "ak-sidebar__account--active" : undefined}
+          />
+        }
+        sidebarFooter={sidebarFooter}
+        eyebrow={heading.eyebrow}
+        title={heading.title}
+        actions={usageNode}
+      >
+        {openKitId ? (
             <KitEditor forge={forge} kitId={openKitId} notify={notify} onClose={() => { setOpenKitId(null); void refresh(); }} />
           ) : section === "my-kits" ? (
             <MyKits
@@ -275,14 +289,13 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
           ) : (
             <AboutSection forge={forge} />
           )}
-        </section>
-      </div>
+      </AppShell>
 
       {submitKitId && (
         <SubmitModal forge={forge} kitId={submitKitId} notify={notify} onClose={() => setSubmitKitId(null)} />
       )}
       {toast && <div className={`akf-toast${toast.err ? " err" : ""}`}>{toast.msg}</div>}
-    </div>
+    </>
   );
 }
 

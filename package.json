@@ -15,6 +15,7 @@
     "@agentkitforge/auto-core": "github:AgentKitProject/agentkitauto-core",
     "@agentkitforge/contracts": "^0.13.0",
     "@agentkitforge/core": "^0.4.0",
+    "@agentkitforge/ui": "file:../agentkitforge-ui",
     "@agentkitforge/gateway-core": "github:AgentKitProject/agentkitgateway-core",
     "@aws-sdk/client-dynamodb": "^3.1069.0",
     "@aws-sdk/client-ecs": "^3.1069.0",
