@@ -10,6 +10,8 @@ import * as logs from "aws-cdk-lib/aws-logs";
 import * as lambda from "aws-cdk-lib/aws-lambda";
 import * as events from "aws-cdk-lib/aws-events";
 import * as targets from "aws-cdk-lib/aws-events-targets";
+import * as ses from "aws-cdk-lib/aws-ses";
+import * as route53 from "aws-cdk-lib/aws-route53";
 
 /**
  * Hosted (AWS) backing store for the agentkitforge-web `KitStore`/`UserSettingsStore`
@@ -111,6 +113,23 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       this.node.tryGetContext("anthropicApiKey");
     const autoWorkerServiceKey: string | undefined =
       this.node.tryGetContext("autoWorkerServiceKey");
+
+    // Phase D — result-delivery SES sender. The app sends completion
+    // notifications from this verified-domain address (noreply@agentkitproject.com
+    // by default; context-overridable). The sender's DOMAIN must be a verified SES
+    // identity (created below) for SES to accept the send.
+    const sesSender: string =
+      this.node.tryGetContext("sesSender") ?? "noreply@agentkitproject.com";
+    // The verified SES domain identity (the part after the @). Used both to create
+    // the EmailIdentity and to scope the SendEmail grant's FromAddress condition.
+    const sesDomain: string = sesSender.includes("@")
+      ? sesSender.slice(sesSender.indexOf("@") + 1)
+      : sesSender;
+    // Escape hatch: if cross-zone DKIM record creation is undesirable in a given
+    // environment, set context `sesAutoDkimRecords=false` to create the identity
+    // WITHOUT the Route53 records and instead emit the records to add manually.
+    const sesAutoDkimRecords: boolean =
+      this.node.tryGetContext("sesAutoDkimRecords") !== "false";
 
     // ---- 1. DynamoDB tables --------------------------------------------------
     const autoRunsTable = new dynamodb.Table(this, "AutoRunsTable", {
@@ -264,6 +283,55 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       gatewaySessionsName
     );
 
+    // ---- 4b. SES sender identity (Phase D result delivery) -------------------
+    // A verified SES (SESv2) DOMAIN identity for `agentkitproject.com` with Easy
+    // DKIM, so the app can send completion notifications from
+    // noreply@agentkitproject.com. When sesAutoDkimRecords is true (default) the
+    // identity is bound to the EXISTING Route53 hosted zone via
+    // Identity.publicHostedZone — CDK then auto-creates the three DKIM CNAME
+    // records IN that zone, which auto-verifies the domain (no manual DNS step).
+    // The zone is imported by its known id + name (no live lookup, so synth needs
+    // no AWS creds). If cross-zone record creation is undesirable, set context
+    // `sesAutoDkimRecords=false`: the identity is created WITHOUT records and the
+    // DKIM tokens are emitted as CfnOutputs to add to DNS by hand.
+    //
+    // PRODUCTION-ACCESS CAVEAT: a brand-new SES account is in the SANDBOX — it can
+    // only send to *verified* recipient addresses. Request SES production access
+    // (a one-time console/support step, NOT expressible in CDK) before delivering
+    // to arbitrary user-supplied recipients.
+    const sesHostedZone = route53.PublicHostedZone.fromPublicHostedZoneAttributes(
+      this,
+      "AgentKitProjectZone",
+      {
+        hostedZoneId: "Z0768123E25IYRUTC9VT",
+        zoneName: "agentkitproject.com"
+      }
+    );
+    const senderIdentity = new ses.EmailIdentity(this, "AutoDeliverySenderIdentity", {
+      identity: sesAutoDkimRecords
+        ? // Bind to the existing zone → CDK creates the DKIM CNAMEs there
+          // (Easy DKIM) and the domain auto-verifies.
+          ses.Identity.publicHostedZone(sesHostedZone)
+        : // Identity WITHOUT auto-records — emit DKIM tokens as outputs to add by hand.
+          ses.Identity.domain(sesDomain),
+      dkimSigning: true
+    });
+    // When NOT auto-creating records, surface the DKIM CNAME tokens so they can be
+    // added to DNS manually (record name `<token>._domainkey.<domain>` → CNAME
+    // `<token>.dkim.amazonses.com`). Easy-DKIM tokens are exposed via the L1.
+    if (!sesAutoDkimRecords) {
+      const cfn = senderIdentity.node.defaultChild as ses.CfnEmailIdentity;
+      new cdk.CfnOutput(this, "SesDkimToken1", {
+        value: cfn.attrDkimDnsTokenName1,
+        description: "SES_DKIM_CNAME_NAME_1 (→ value SES_DKIM_CNAME_VALUE_1)"
+      });
+      new cdk.CfnOutput(this, "SesDkimValue1", { value: cfn.attrDkimDnsTokenValue1, description: "SES_DKIM_CNAME_VALUE_1" });
+      new cdk.CfnOutput(this, "SesDkimToken2", { value: cfn.attrDkimDnsTokenName2, description: "SES_DKIM_CNAME_NAME_2" });
+      new cdk.CfnOutput(this, "SesDkimValue2", { value: cfn.attrDkimDnsTokenValue2, description: "SES_DKIM_CNAME_VALUE_2" });
+      new cdk.CfnOutput(this, "SesDkimToken3", { value: cfn.attrDkimDnsTokenName3, description: "SES_DKIM_CNAME_NAME_3" });
+      new cdk.CfnOutput(this, "SesDkimValue3", { value: cfn.attrDkimDnsTokenValue3, description: "SES_DKIM_CNAME_VALUE_3" });
+    }
+
     // Task role: least privilege for what the worker itself touches at runtime.
     const taskRole = new iam.Role(this, "AutoTaskRole", {
       assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com")
@@ -289,6 +357,21 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     // uses os.tmpdir), so this S3 RW is for kit-tree reads + future S3-backed
     // workspaces. Whole-bucket grant matches the existing simple-grant style.
     kitTrees.grantReadWrite(taskRole);
+    // Phase D: the worker delivers a run's result by email via SES (SendEmail /
+    // SendRawEmail). Grant the task role send permission scoped to the verified
+    // sender identity's ARN. ses.identity.grantSendEmail adds ses:SendEmail; we
+    // add SendRawEmail explicitly so MIME/raw sends (attachments) also work, with
+    // a FromAddress condition pinning sends to the configured sender domain.
+    senderIdentity.grantSendEmail(taskRole);
+    taskRole.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ses:SendEmail", "ses:SendRawEmail"],
+        resources: [senderIdentity.emailIdentityArn],
+        conditions: {
+          "ForAllValues:StringLike": { "ses:FromAddress": [`*@${sesDomain}`] }
+        }
+      })
+    );
     // Log writes: primarily the execution role (awslogs driver), task role too
     // for any direct in-container log API usage (belt-and-suspenders).
     logGroup.grantWrite(executionRole);
@@ -320,7 +403,10 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       AUTO_MARKUP_BPS: autoMarkupBps,
       AUTO_CLOUD_RUN_CENTS_PER_MIN: autoCloudRunCentsPerMin,
       WEB_FORGE_INTERNAL_URL: webForgeInternalUrl,
-      FORGE_AWS_REGION: this.region
+      FORGE_AWS_REGION: this.region,
+      // Phase D: the from-address the worker's EmailSender uses for result
+      // delivery. Must be (a subdomain of) the verified SES identity above.
+      SES_SENDER: sesSender
     };
     // Phase A: ANTHROPIC_API_KEY (platform key) and AUTO_WORKER_SERVICE_KEY are
     // passed as plain env from CDK context for simplicity; migrate to Secrets
@@ -520,6 +606,15 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     new cdk.CfnOutput(this, "AutoWorkerRepoUri", {
       value: workerRepo.repositoryUri,
       description: "AUTO_WORKER_ECR_REPO_URI"
+    });
+    // Phase D: result-delivery SES sender + verified identity name.
+    new cdk.CfnOutput(this, "SesSenderOut", {
+      value: sesSender,
+      description: "SES_SENDER"
+    });
+    new cdk.CfnOutput(this, "SesSenderIdentityOut", {
+      value: senderIdentity.emailIdentityName,
+      description: "SES_SENDER_IDENTITY (verified SES domain identity)"
     });
   }
 }

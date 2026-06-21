@@ -44,6 +44,7 @@ import {
   processAutoRun,
   runDueSchedules,
   validateCron,
+  validateDeliveryConfig,
   WebhookError,
   type AutoApproval,
   type AutoBackend,
@@ -56,6 +57,7 @@ import {
   type CreateRunInput,
   type CreateScheduleInput,
   type CreateWebhookInput,
+  type DeliveryConfig,
   type KitRef,
   type NetworkPolicy,
   type ProcessAutoRunDeps,
@@ -90,7 +92,7 @@ import {
 import type { StoredSession, TokenStore } from "@agentkitforge/core/market";
 
 export { ApprovalDeniedError };
-export type { AutoApproval, AutoRun, AutoRunInputFileRef, AutoSchedule, AutoWebhook, KitRef, NetworkPolicy };
+export type { AutoApproval, AutoRun, AutoRunInputFileRef, AutoSchedule, AutoWebhook, DeliveryConfig, KitRef, NetworkPolicy };
 
 // ---------------------------------------------------------------------------
 // Storage deps (singleton)
@@ -632,6 +634,32 @@ export function parseNetworkPolicy(raw: unknown): NetworkPolicy {
   return normalizeNetworkPolicy(raw);
 }
 
+/**
+ * Phase D — parse + validate an OPT-IN result-delivery config off a request body.
+ *
+ * Delivery is OPTIONAL "notify on completion": absent / null / an empty object →
+ * undefined (no delivery, fully backward compatible). When present we run it
+ * through auto-core's `validateDeliveryConfig`, which enforces the structural
+ * schema (strict object; email[] basic-format; webhook.url + optional secret)
+ * PLUS the semantic rules (https-only webhook url, basic email format). Any
+ * violation is rethrown as an AutoValidationError so the routes surface it as a
+ * 400. The returned (parsed/normalized) config is threaded onto the run/schedule/
+ * webhook record; the worker reads it off the run at completion to deliver.
+ */
+export function parseDeliveryConfig(raw: unknown): DeliveryConfig | undefined {
+  // Treat undefined/null/empty-object as "no delivery" (never invent delivery).
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw as object).length === 0) {
+    return undefined;
+  }
+  try {
+    return validateDeliveryConfig(raw);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : "invalid delivery config";
+    throw new AutoValidationError(`Invalid delivery config: ${detail}`);
+  }
+}
+
 /** Create a standing approval. Phase C: an optional networkPolicy (deny_all
  *  default, or an allowlist of hosts) opts the kit's runs into guarded https
  *  egress. The `http_fetch` tool is honored only when it is BOTH in the
@@ -705,6 +733,11 @@ export async function startRun(input: {
    *  workspace `inputs/` dir before execution. */
   inputFiles?: AutoRunInputFileRef[];
   kitContext: KitContextOptions;
+  /** Phase D: OPT-IN result delivery (email + signed webhook). Persisted on the
+   *  run; the worker reads it off the run at completion and delivers. Absent →
+   *  no delivery. For scheduled/webhook-fired runs the sweep / consumeWebhook
+   *  createAndDispatch COPIES the schedule's/webhook's config onto the run here. */
+  deliveryConfig?: DeliveryConfig;
   /** How this run was triggered. Defaults to "on_demand" (Phase A). The Phase B
    *  scheduler passes "schedule" + scheduleId; the Phase C webhook consumer passes
    *  "webhook" + webhookId — the SAME create + gate + dispatch path is reused. */
@@ -790,7 +823,11 @@ export async function startRun(input: {
     // Phase C: webhook-fired runs carry trigger "webhook" + webhookId.
     ...(input.webhookId !== undefined ? { webhookId: input.webhookId } : {}),
     // Phase C: out-of-band staged input-file manifest (hydrated by the worker).
-    ...(input.inputFiles && input.inputFiles.length > 0 ? { inputFiles: input.inputFiles } : {})
+    ...(input.inputFiles && input.inputFiles.length > 0 ? { inputFiles: input.inputFiles } : {}),
+    // Phase D: opt-in result delivery (email + signed webhook). Persisted on the
+    // run so the worker can deliver at completion. Scheduled/webhook runs inherit
+    // this from the schedule/webhook (the createAndDispatch paths pass it through).
+    ...(input.deliveryConfig ? { deliveryConfig: input.deliveryConfig } : {})
   };
   const run = await storage.runs.createRun(createInput);
 
@@ -1046,6 +1083,8 @@ export async function createSchedule(input: {
   model?: string;
   approvalId: string;
   files?: { path: string; content: string }[];
+  /** Phase D: opt-in result delivery copied onto every run this schedule fires. */
+  deliveryConfig?: DeliveryConfig;
 }): Promise<AutoSchedule> {
   if (typeof input.prompt !== "string" || input.prompt.trim().length === 0) {
     throw new AutoValidationError("A schedule task prompt is required.");
@@ -1086,7 +1125,10 @@ export async function createSchedule(input: {
     approvalId: input.approvalId,
     enabled: true,
     createdAt,
-    nextRunAt
+    nextRunAt,
+    // Phase D: opt-in delivery stored on the schedule; the sweep copies it onto
+    // every run it fires.
+    ...(input.deliveryConfig ? { deliveryConfig: input.deliveryConfig } : {})
   };
   return storage.schedules.createSchedule(createInput);
 }
@@ -1232,6 +1274,9 @@ export async function runScheduleSweep(): Promise<ScheduleSweepSummary> {
         ? { files: schedule.input.files }
         : {}),
       kitContext: { serviceUserId: schedule.userId },
+      // Phase D: COPY the schedule's opt-in delivery config onto the fired run so
+      // scheduled runs deliver their result exactly like an on-demand run does.
+      ...(schedule.deliveryConfig ? { deliveryConfig: schedule.deliveryConfig } : {}),
       trigger: "schedule",
       scheduleId: schedule.id
     });
@@ -1436,6 +1481,8 @@ export async function createWebhook(input: {
   budgetCents: number;
   model?: string;
   approvalId: string;
+  /** Phase D: opt-in result delivery copied onto every run this webhook fires. */
+  deliveryConfig?: DeliveryConfig;
 }): Promise<CreatedWebhook> {
   if (!Number.isInteger(input.budgetCents) || input.budgetCents <= 0) {
     throw new AutoValidationError("budgetCents is required and must be a positive integer (US cents).");
@@ -1462,7 +1509,10 @@ export async function createWebhook(input: {
     model,
     enabled: true,
     secretHash: hashWebhookSecret(secret),
-    createdAt: now()
+    createdAt: now(),
+    // Phase D: opt-in delivery stored on the webhook; consumeWebhook copies it
+    // onto every run a fire produces.
+    ...(input.deliveryConfig ? { deliveryConfig: input.deliveryConfig } : {})
   };
   const webhook = await storage.webhooks.createWebhook(createInput);
   return { webhook, secret, ingestUrl: webhookIngestUrl(webhook.id) };
@@ -1533,6 +1583,13 @@ export async function fireWebhook(input: {
 }): Promise<AutoRun> {
   const storage = await getAutoStorage();
 
+  // Phase D: read the webhook's opt-in delivery config up-front so the fired run
+  // inherits it. auto-core's consumeWebhook builds its CreateRunInput WITHOUT a
+  // deliveryConfig, so we copy it from the webhook record here (auto-core still
+  // re-verifies the secret + approval before our createAndDispatch is invoked).
+  const webhookRecord = await storage.webhooks.getWebhook(input.webhookId);
+  const webhookDelivery = webhookRecord?.deliveryConfig;
+
   const createAndDispatch = async (createInput: CreateRunInput): Promise<AutoRun> => {
     // SERVICE MODE: no user session. The webhook's userId drives kit-context
     // resolution (protected Market kits resolve server-to-service via
@@ -1546,6 +1603,13 @@ export async function fireWebhook(input: {
       budgetCents: createInput.budgetCents,
       ...(createInput.model ? { model: createInput.model } : {}),
       kitContext: { serviceUserId: createInput.userId },
+      // Phase D: COPY the webhook's opt-in delivery config onto the fired run so
+      // webhook-fired runs deliver their result exactly like an on-demand run.
+      // Prefer createInput.deliveryConfig (future-proof if auto-core threads it),
+      // falling back to the webhook record we read above.
+      ...(createInput.deliveryConfig ?? webhookDelivery
+        ? { deliveryConfig: createInput.deliveryConfig ?? webhookDelivery }
+        : {}),
       trigger: "webhook",
       ...(createInput.webhookId !== undefined ? { webhookId: createInput.webhookId } : {}),
       ...(createInput.inputFiles ? { inputFiles: createInput.inputFiles } : {})

@@ -14,6 +14,7 @@ import {
   AutoValidationError,
   createWebhook,
   listWebhooks,
+  parseDeliveryConfig,
   parseKitRef
 } from "@/server/core/auto";
 import { createWebhookResponse, webhookListResponse } from "@/app/api/auto/webhooks/shared";
@@ -36,19 +37,23 @@ export async function POST(request: Request) {
     budgetCents?: unknown;
     model?: unknown;
     approvalId?: unknown;
+    deliveryConfig?: unknown;
   };
   try {
     const kitRef = parseKitRef(body.kitRef);
     const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
     const model = typeof body.model === "string" ? body.model : undefined;
     const approvalId = typeof body.approvalId === "string" ? body.approvalId : "";
+    // Phase D: opt-in result delivery copied onto every run this webhook fires.
+    const deliveryConfig = parseDeliveryConfig(body.deliveryConfig);
 
     const created = await createWebhook({
       userId,
       kitRef,
       budgetCents,
       approvalId,
-      ...(model ? { model } : {})
+      ...(model ? { model } : {}),
+      ...(deliveryConfig ? { deliveryConfig } : {})
     });
     return Response.json(createWebhookResponse(created), { status: 201 });
   } catch (error) {

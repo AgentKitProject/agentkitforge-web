@@ -123,6 +123,36 @@ function localTimezone(): string {
   }
 }
 
+// Phase D: opt-in result delivery. A run/schedule/webhook can OPTIONALLY notify
+// on completion via email and/or a signed webhook. Absent → no delivery.
+type DeliveryWebhook = { url: string; secret?: string };
+type DeliveryConfig = { email?: string[]; webhook?: DeliveryWebhook };
+
+// Per-form delivery field state (raw text inputs; assembled into a DeliveryConfig
+// just before the create request).
+type DeliveryFields = { emails: string; webhookUrl: string; webhookSecret: string };
+const EMPTY_DELIVERY: DeliveryFields = { emails: "", webhookUrl: "", webhookSecret: "" };
+
+/**
+ * Assemble a DeliveryConfig from the raw form fields, or undefined when nothing
+ * was entered (delivery stays off). Emails are comma/whitespace/newline split.
+ * The webhook channel is included only when a URL is present (an optional secret
+ * rides along). The SERVER re-validates (https-only webhook, basic email format)
+ * and rejects bad input with a 400 — this is a convenience pass, not the gate.
+ */
+function buildDeliveryConfig(f: DeliveryFields): DeliveryConfig | undefined {
+  const email = f.emails
+    .split(/[\s,]+/)
+    .map((e) => e.trim())
+    .filter((e) => e.length > 0);
+  const url = f.webhookUrl.trim();
+  const secret = f.webhookSecret.trim();
+  const config: DeliveryConfig = {};
+  if (email.length > 0) config.email = email;
+  if (url.length > 0) config.webhook = { url, ...(secret ? { secret } : {}) };
+  return config.email || config.webhook ? config : undefined;
+}
+
 async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, { credentials: "include", ...init });
   const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
@@ -131,6 +161,56 @@ async function jsonFetch<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(msg);
   }
   return body as T;
+}
+
+/**
+ * Phase D — the opt-in "Deliver result" sub-form, reused by Start-a-run,
+ * Schedules, and Webhooks. Optional email recipients (comma-separated) + an
+ * optional signed-webhook destination (URL + optional secret). Empty → no
+ * delivery. Controlled by a DeliveryFields value the parent owns per form.
+ */
+function DeliverySection({
+  value,
+  onChange,
+  scopeNoun
+}: {
+  value: DeliveryFields;
+  onChange: (next: DeliveryFields) => void;
+  scopeNoun: string;
+}) {
+  return (
+    <div style={{ marginTop: 8 }}>
+      <h4 style={{ margin: "8px 0 2px" }}>Deliver result (optional)</h4>
+      <p className="form-copy" style={{ marginTop: 0 }}>
+        Notify on completion. Leave blank for no delivery. We&apos;ll send the {scopeNoun}&apos;s final
+        result to the email(s) and/or webhook below when it finishes.
+      </p>
+      <Field label="Email recipients (comma-separated)">
+        <Input
+          type="text"
+          value={value.emails}
+          onChange={(e) => onChange({ ...value, emails: e.target.value })}
+          placeholder="you@example.com, ops@example.com"
+        />
+      </Field>
+      <Field label="Webhook URL (https only)">
+        <Input
+          type="url"
+          value={value.webhookUrl}
+          onChange={(e) => onChange({ ...value, webhookUrl: e.target.value })}
+          placeholder="https://example.com/auto-result"
+        />
+      </Field>
+      <Field label="Webhook signing secret (optional)">
+        <Input
+          type="text"
+          value={value.webhookSecret}
+          onChange={(e) => onChange({ ...value, webhookSecret: e.target.value })}
+          placeholder="HMAC-SHA256 secret"
+        />
+      </Field>
+    </div>
+  );
 }
 
 export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Notify }) {
@@ -157,6 +237,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   // Phase C: user-provided input files staged via presigned upload then attached
   // to the run as a manifest. Selected files are uploaded on run start.
   const [runInputFiles, setRunInputFiles] = useState<File[]>([]);
+  // Phase D: opt-in result-delivery fields for the run.
+  const [runDelivery, setRunDelivery] = useState<DeliveryFields>(EMPTY_DELIVERY);
 
   // Webhook state (Phase C).
   const [webhooks, setWebhooks] = useState<Webhook[]>([]);
@@ -165,6 +247,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   const [whBusy, setWhBusy] = useState(false);
   // The one-time plaintext secret + ingest URL, shown ONCE after creation.
   const [whSecret, setWhSecret] = useState<{ secret: string; ingestUrl: string } | null>(null);
+  // Phase D: opt-in result-delivery fields for webhook-fired runs.
+  const [whDelivery, setWhDelivery] = useState<DeliveryFields>(EMPTY_DELIVERY);
 
   // Schedule state (Phase B).
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -174,6 +258,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   const [schedPrompt, setSchedPrompt] = useState("");
   const [schedBudgetUsd, setSchedBudgetUsd] = useState("0.50");
   const [schedBusy, setSchedBusy] = useState(false);
+  // Phase D: opt-in result-delivery fields copied onto every scheduled run.
+  const [schedDelivery, setSchedDelivery] = useState<DeliveryFields>(EMPTY_DELIVERY);
 
   const loadApprovals = useCallback(async () => {
     try {
@@ -332,6 +418,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         inputFiles = manifest;
       }
 
+      // Phase D: opt-in delivery (email + signed webhook) assembled from the form.
+      const deliveryConfig = buildDeliveryConfig(runDelivery);
       const { id } = await jsonFetch<{ id: string }>(autoRoutes.runs(), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -339,12 +427,14 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
           kitRef,
           input: { prompt: runPrompt },
           budgetCents: cents,
-          ...(inputFiles && inputFiles.length > 0 ? { inputFiles } : {})
+          ...(inputFiles && inputFiles.length > 0 ? { inputFiles } : {}),
+          ...(deliveryConfig ? { deliveryConfig } : {})
         })
       });
       notify("Run started.");
       setRunPrompt("");
       setRunInputFiles([]);
+      setRunDelivery(EMPTY_DELIVERY);
       setOpenRunId(id);
       await loadRuns();
     } catch (e) {
@@ -379,6 +469,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setSchedBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: schedKitId };
+      // Phase D: opt-in delivery copied onto every run this schedule fires.
+      const deliveryConfig = buildDeliveryConfig(schedDelivery);
       await jsonFetch<Schedule>(autoRoutes.schedules(), {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -388,11 +480,13 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
           timezone: schedTz.trim() || "UTC",
           input: { prompt: schedPrompt },
           budgetCents: cents,
-          approvalId: approval.id
+          approvalId: approval.id,
+          ...(deliveryConfig ? { deliveryConfig } : {})
         })
       });
       notify("Schedule created.");
       setSchedPrompt("");
+      setSchedDelivery(EMPTY_DELIVERY);
       await loadSchedules();
     } catch (e) {
       notify(errMsg(e), true);
@@ -433,13 +527,21 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setWhBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: whKitId };
+      // Phase D: opt-in delivery copied onto every run this webhook fires.
+      const deliveryConfig = buildDeliveryConfig(whDelivery);
       const created = await jsonFetch<CreatedWebhook>(autoRoutes.webhooks(), {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef, budgetCents: cents, approvalId: approval.id })
+        body: JSON.stringify({
+          kitRef,
+          budgetCents: cents,
+          approvalId: approval.id,
+          ...(deliveryConfig ? { deliveryConfig } : {})
+        })
       });
       // Show the plaintext secret + ingest URL ONCE — never retrievable again.
       setWhSecret({ secret: created.secret, ingestUrl: created.ingestUrl });
+      setWhDelivery(EMPTY_DELIVERY);
       notify("Webhook created. Copy the secret now — it is shown only once.");
       await loadWebhooks();
     } catch (e) {
@@ -634,6 +736,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
             Files are uploaded to your run&apos;s <code>inputs/</code> directory before it starts, so the kit can read them.
           </p>
         </Field>
+        {/* ---- Deliver result (Phase D) ---- */}
+        <DeliverySection value={runDelivery} onChange={setRunDelivery} scopeNoun="run" />
         <Button disabled={runBusy} loading={runBusy} onClick={() => void startRun()}>
           {runBusy ? "Starting…" : "Start run"}
         </Button>
@@ -668,6 +772,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         <Field label="Per-run budget (USD, required)">
           <Input type="number" min="0.01" step="0.01" value={schedBudgetUsd} onChange={(e) => setSchedBudgetUsd(e.target.value)} />
         </Field>
+        {/* ---- Deliver result (Phase D) ---- */}
+        <DeliverySection value={schedDelivery} onChange={setSchedDelivery} scopeNoun="scheduled run" />
         <Button disabled={schedBusy} loading={schedBusy} onClick={() => void createSchedule()}>
           {schedBusy ? "Creating…" : "Create schedule"}
         </Button>
@@ -728,6 +834,8 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         <Field label="Per-fire budget (USD, required)">
           <Input type="number" min="0.01" step="0.01" value={whBudgetUsd} onChange={(e) => setWhBudgetUsd(e.target.value)} />
         </Field>
+        {/* ---- Deliver result (Phase D) ---- */}
+        <DeliverySection value={whDelivery} onChange={setWhDelivery} scopeNoun="webhook-fired run" />
         <Button disabled={whBusy} loading={whBusy} onClick={() => void createWebhook()}>
           {whBusy ? "Creating…" : "Create webhook"}
         </Button>

@@ -98,6 +98,11 @@ frontend:
         # the MARKET_SERVICE_KEY set on agentkitmarket-app. Distinct from
         # AUTO_WORKER_SERVICE_KEY. Never echoed to logs; never sent to the browser.
         - 'printf "MARKET_SERVICE_KEY=%s\n" "$MARKET_SERVICE_KEY" >> .env.production'
+        # AUTO Phase D — result-delivery SES sender. OPTIONAL, baked (no preBuild
+        # gate). The hosted worker reads SES_SENDER off its ECS task def; baked here
+        # for parity / self-host SSR sends. Must be a (subdomain of the) verified
+        # SES domain identity (agentkitproject.com).
+        - 'printf "SES_SENDER=%s\n" "$SES_SENDER" >> .env.production'
         # Stripe prepaid credit top-up (Gateway 1b-ii). Both vars are optional —
         # the checkout and webhook routes return 503 "payments not configured"
         # when either is absent. Set in Amplify env once keys are provisioned;
