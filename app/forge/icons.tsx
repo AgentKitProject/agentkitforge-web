@@ -134,3 +134,46 @@ export const StarIcon = ({ filled, ...p }: IconProps & { filled?: boolean }) => 
     <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
   </svg>
 );
+
+// AgentKitForge brand mark — the indigo/cyan 3D forge-cube icon.
+// Ported from agentkitforge-app/src/assets/brand/agentkitforge-icon.svg.
+// Multi-color brand palette (not currentColor); self-contained, full-bleed.
+export const ForgeMark = ({ size = 38, ...props }: IconProps) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 96 96"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    role="img"
+    aria-label="AgentKitForge"
+    {...props}
+  >
+    <defs>
+      <linearGradient id="akf-left" x1="18" y1="45" x2="48" y2="84" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#4F46E5" />
+        <stop offset="1" stopColor="#3730A3" />
+      </linearGradient>
+      <linearGradient id="akf-right" x1="76" y1="45" x2="45" y2="84" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#6366F1" />
+        <stop offset="1" stopColor="#4338CA" />
+      </linearGradient>
+      <linearGradient id="akf-top" x1="26" y1="18" x2="66" y2="44" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#818CF8" />
+        <stop offset="1" stopColor="#4F46E5" />
+      </linearGradient>
+      <linearGradient id="akf-cyan" x1="48" y1="39" x2="48" y2="58" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#22D3EE" />
+        <stop offset="1" stopColor="#06B6D4" />
+      </linearGradient>
+    </defs>
+    <path d="M18 49.4L47.8 32.4L78 49.4L48 66.8L18 49.4Z" fill="#5B5FEF" />
+    <path d="M18 49.4L48 66.8V86.2L18 68.5V49.4Z" fill="url(#akf-left)" />
+    <path d="M78 49.4L48 66.8V86.2L78 68.5V49.4Z" fill="url(#akf-right)" />
+    <path d="M42.6 42.8H53.4V57.6L48 61.1L42.6 57.6V42.8Z" fill="url(#akf-cyan)" />
+    <path d="M38.6 58.8L48 64.4L57.4 58.8L62.8 62L48 70.8L33.2 62L38.6 58.8Z" fill="#CFFAFE" />
+    <path d="M30.5 18.6L48 8.6L65.7 18.6L48.1 28.8L30.5 18.6Z" fill="url(#akf-top)" />
+    <path d="M30.5 18.6L48.1 28.8V45.3L30.5 35V18.6Z" fill="#4F46E5" />
+    <path d="M65.7 18.6L48.1 28.8V45.3L65.7 35V18.6Z" fill="#3730A3" />
+  </svg>
+);
