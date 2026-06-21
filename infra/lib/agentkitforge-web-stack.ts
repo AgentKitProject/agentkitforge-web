@@ -97,6 +97,8 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       this.node.tryGetContext("gatewayCreditTxnsTable") ?? "GatewayCreditTxns";
     const gatewayCreditHoldsName: string =
       this.node.tryGetContext("gatewayCreditHoldsTable") ?? "GatewayCreditHolds";
+    const gatewaySessionsName: string =
+      this.node.tryGetContext("gatewaySessionsTable") ?? "GatewaySessions";
     const autoMarkupBps: string =
       this.node.tryGetContext("autoMarkupBps") ?? "2500";
     const autoCloudRunCentsPerMin: string =
@@ -256,6 +258,11 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       "GatewayCreditHoldsTable",
       gatewayCreditHoldsName
     );
+    const gatewaySessions = dynamodb.Table.fromTableName(
+      this,
+      "GatewaySessionsTable",
+      gatewaySessionsName
+    );
 
     // Task role: least privilege for what the worker itself touches at runtime.
     const taskRole = new iam.Role(this, "AutoTaskRole", {
@@ -276,6 +283,8 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     gatewayCreditAccounts.grantReadWriteData(taskRole);
     gatewayCreditTxns.grantReadWriteData(taskRole);
     gatewayCreditHolds.grantReadWriteData(taskRole);
+    // Gateway sessions — the worker's managed turn uses the session store.
+    gatewaySessions.grantReadWriteData(taskRole);
     // Kit-trees bucket: Phase A run workspaces are local-ephemeral (auto-core
     // uses os.tmpdir), so this S3 RW is for kit-tree reads + future S3-backed
     // workspaces. Whole-bucket grant matches the existing simple-grant style.
@@ -307,6 +316,7 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       GATEWAY_CREDIT_ACCOUNTS_TABLE: gatewayCreditAccounts.tableName,
       GATEWAY_CREDIT_TXNS_TABLE: gatewayCreditTxns.tableName,
       GATEWAY_CREDIT_HOLDS_TABLE: gatewayCreditHolds.tableName,
+      GATEWAY_SESSIONS_TABLE: gatewaySessions.tableName,
       AUTO_MARKUP_BPS: autoMarkupBps,
       AUTO_CLOUD_RUN_CENTS_PER_MIN: autoCloudRunCentsPerMin,
       WEB_FORGE_INTERNAL_URL: webForgeInternalUrl,
