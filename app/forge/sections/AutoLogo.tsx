@@ -42,21 +42,21 @@ export function AutoLogo({ size = 42, title = "AgentKitAuto", ...props }: AutoLo
       <rect x="4" y="4" width="56" height="56" rx="16" fill="#ffffff" />
       <rect x="4" y="4" width="56" height="56" rx="16" fill="none" stroke={INDIGO} strokeWidth="5" />
 
-      {/* Orbit arrow: near-complete circle, open gap at top-left, rounded caps.
-          Path runs clockwise from just past the top-left gap, around the
-          right/bottom/left, ending back near the top — the open end carries the
-          arrowhead pointing up / counterclockwise into the gap. r = 17. */}
+      {/* Orbit arrow: near-complete circle (r = 17, centered at 32,32) with an
+          open gap at the top-left. The arc runs the long way around (right →
+          bottom → left), from the top end (250°) to the left end (200°). The
+          open top end carries the arrowhead pointing up / counterclockwise. */}
       <path
-        d="M 23.2 18.7
-           A 17 17 0 1 1 18.7 23.2"
+        d="M 26.2 16.0
+           A 17 17 0 1 1 16.0 26.2"
         fill="none"
         stroke={BLUE}
         strokeWidth="5"
         strokeLinecap="round"
       />
-      {/* Arrowhead at the top-left open end, pointing up/counterclockwise */}
+      {/* Arrowhead at the top open end (26.2,16.0), pointing up/counterclockwise */}
       <path
-        d="M 13.0 25.0 L 18.7 23.2 L 20.5 28.9"
+        d="M 21.2 14.6 L 26.2 16.0 L 24.8 21.0"
         fill="none"
         stroke={BLUE}
         strokeWidth="5"
@@ -64,8 +64,8 @@ export function AutoLogo({ size = 42, title = "AgentKitAuto", ...props }: AutoLo
         strokeLinejoin="round"
       />
 
-      {/* Green dot at the top, near the gap */}
-      <circle cx="32" cy="13.5" r="3.4" fill={GREEN} />
+      {/* Green dot centered in the top-left gap (mid-angle 225°, on the orbit) */}
+      <circle cx="20.0" cy="20.0" r="3.4" fill={GREEN} />
 
       {/* Hexagon nut with a hex hole cut out (evenodd) at the center */}
       <path

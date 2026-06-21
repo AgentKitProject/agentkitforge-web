@@ -14,6 +14,7 @@ import { getForgeClient } from "@/forge-client";
 import type { MyKitEntry } from "@/forge-client";
 import {
   ExportIcon,
+  ForgeMark,
   HammerIcon,
   ImportIcon,
   InfoIcon,
@@ -219,22 +220,7 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
   return (
     <>
       <AppShell
-        logo={
-          <span
-            style={{
-              display: "grid",
-              placeItems: "center",
-              width: 38,
-              height: 38,
-              color: "var(--ak-text)",
-              background: "var(--ak-sidebar-active)",
-              borderRadius: "var(--ak-radius-nav)"
-            }}
-            aria-hidden="true"
-          >
-            <SparklesIcon size={22} />
-          </span>
-        }
+        logo={<ForgeMark size={38} aria-hidden="true" />}
         brand={
           <>
             AgentKit<span style={{ color: "var(--ak-brand)" }}>Forge</span>

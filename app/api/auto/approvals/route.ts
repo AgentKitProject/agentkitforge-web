@@ -61,6 +61,13 @@ export async function GET() {
     if (error instanceof UnauthorizedError) return Response.json({ error: error.message }, { status: 401 });
     throw error;
   }
-  const approvals = await listApprovals(userId);
-  return Response.json({ approvals }, { status: 200 });
+  // Degrade gracefully on a read failure (uninitialized/unreachable store)
+  // rather than 500-ing the Auto page load; the UI renders an empty state.
+  try {
+    const approvals = await listApprovals(userId);
+    return Response.json({ approvals }, { status: 200 });
+  } catch (error) {
+    console.error("[auto] listApprovals failed", error);
+    return Response.json({ approvals: [] }, { status: 200 });
+  }
 }

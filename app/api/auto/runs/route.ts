@@ -105,6 +105,14 @@ export async function GET() {
     if (error instanceof UnauthorizedError) return Response.json({ error: error.message }, { status: 401 });
     throw error;
   }
-  const runs = await listRuns(userId);
-  return Response.json({ runs }, { status: 200 });
+  // A read failure on listing (e.g. an uninitialized/unreachable store) must not
+  // hard-fail the Auto page load. The UI renders an empty state correctly, so
+  // degrade to an empty list and log for observability instead of 500-ing.
+  try {
+    const runs = await listRuns(userId);
+    return Response.json({ runs }, { status: 200 });
+  } catch (error) {
+    console.error("[auto] listRuns failed", error);
+    return Response.json({ runs: [] }, { status: 200 });
+  }
 }

@@ -77,6 +77,13 @@ export async function GET() {
     if (error instanceof UnauthorizedError) return Response.json({ error: error.message }, { status: 401 });
     throw error;
   }
-  const webhooks = await listWebhooks(userId);
-  return Response.json({ webhooks: webhookListResponse(webhooks) }, { status: 200 });
+  // Degrade gracefully on a read failure (uninitialized/unreachable store)
+  // rather than 500-ing the Auto page load; the UI renders an empty state.
+  try {
+    const webhooks = await listWebhooks(userId);
+    return Response.json({ webhooks: webhookListResponse(webhooks) }, { status: 200 });
+  } catch (error) {
+    console.error("[auto] listWebhooks failed", error);
+    return Response.json({ webhooks: [] }, { status: 200 });
+  }
 }
