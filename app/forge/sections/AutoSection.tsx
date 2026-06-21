@@ -17,7 +17,7 @@
 // All HTTP is the cookie path (/api/auto/*) via fetch with credentials — this is
 // the browser UI; the bearer path (/api/forge/auto/*) is for desktop/CLI clients.
 import { useCallback, useEffect, useState } from "react";
-import { Badge, Button, Field, Input, Select, Textarea, brandVars } from "@agentkitforge/ui";
+import { Badge, Button, Card, Field, Input, Pill, Select, Textarea, brandVars } from "@agentkitforge/ui";
 import type { MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 import { AutoLogo } from "./AutoLogo";
@@ -30,18 +30,42 @@ const AUTO_GREEN_STRONG = "#15803d";
 
 // Phase-A sandbox tools the user can authorize. NO run_command (no autonomous shell).
 const SANDBOX_TOOLS = ["read_file", "list_dir", "write_file"] as const;
+// Phase C: the network-egress tool. Available to a run only when the approval's
+// networkPolicy is an allowlist AND this tool is in the allowlist.
+const HTTP_FETCH_TOOL = "http_fetch";
 
 type KitRef = { source: "local"; localKitId: string };
+
+// Phase C: network egress policy (deny_all default, or an allowlist of hosts).
+type NetworkPolicy = { mode: "deny_all" } | { mode: "allowlist"; hosts: string[] };
 
 type Approval = {
   id: string;
   kitRef: { source: string; localKitId?: string; marketKitId?: string; slug?: string };
   toolAllowlist: string[];
   maxBudgetCents: number;
-  networkPolicy: string;
+  networkPolicy: NetworkPolicy | string;
   createdAt: string;
   revokedAt: string | null;
 };
+
+type Webhook = {
+  id: string;
+  kitRef: { source: string; localKitId?: string; marketKitId?: string; slug?: string };
+  approvalId: string;
+  budgetCents: number;
+  model: string;
+  enabled: boolean;
+  createdAt: string;
+  lastFiredAt: string | null;
+  lastRunId: string | null;
+  lastError: string | null;
+  fireCount: number;
+  ingestUrl: string;
+};
+
+// The create-webhook response additionally carries the one-time plaintext secret.
+type CreatedWebhook = Webhook & { secret: string };
 
 type AuditEntry = { tool: string; argsSummary: string; outcome: string; ts: string; detail?: string };
 type RunFile = { path: string; sizeBytes: number };
@@ -119,12 +143,27 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
   const [apprTools, setApprTools] = useState<string[]>(["read_file", "list_dir"]);
   const [apprBudgetUsd, setApprBudgetUsd] = useState("1.00");
   const [apprBusy, setApprBusy] = useState(false);
+  // Phase C: network egress policy on the approval form.
+  const [apprNetMode, setApprNetMode] = useState<"deny_all" | "allowlist">("deny_all");
+  const [apprNetHosts, setApprNetHosts] = useState(""); // newline/comma-separated host patterns
+  const [apprHttpFetch, setApprHttpFetch] = useState(false);
 
   // Run form state.
   const [runKitId, setRunKitId] = useState("");
   const [runPrompt, setRunPrompt] = useState("");
   const [runBudgetUsd, setRunBudgetUsd] = useState("0.50");
   const [runBusy, setRunBusy] = useState(false);
+  // Phase C: user-provided input files staged via presigned upload then attached
+  // to the run as a manifest. Selected files are uploaded on run start.
+  const [runInputFiles, setRunInputFiles] = useState<File[]>([]);
+
+  // Webhook state (Phase C).
+  const [webhooks, setWebhooks] = useState<Webhook[]>([]);
+  const [whKitId, setWhKitId] = useState("");
+  const [whBudgetUsd, setWhBudgetUsd] = useState("0.50");
+  const [whBusy, setWhBusy] = useState(false);
+  // The one-time plaintext secret + ingest URL, shown ONCE after creation.
+  const [whSecret, setWhSecret] = useState<{ secret: string; ingestUrl: string } | null>(null);
 
   // Schedule state (Phase B).
   const [schedules, setSchedules] = useState<Schedule[]>([]);
@@ -162,11 +201,21 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     }
   }, [notify]);
 
+  const loadWebhooks = useCallback(async () => {
+    try {
+      const { webhooks } = await jsonFetch<{ webhooks: Webhook[] }>("/api/auto/webhooks");
+      setWebhooks(webhooks);
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  }, [notify]);
+
   useEffect(() => {
     void loadApprovals();
     void loadRuns();
     void loadSchedules();
-  }, [loadApprovals, loadRuns, loadSchedules]);
+    void loadWebhooks();
+  }, [loadApprovals, loadRuns, loadSchedules, loadWebhooks]);
 
   // Poll the open run + the list while a run is active.
   useEffect(() => {
@@ -201,13 +250,28 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     if (!apprKitId) return notify("Pick a kit to authorize.", true);
     const cents = Math.round(parseFloat(apprBudgetUsd) * 100);
     if (!Number.isInteger(cents) || cents <= 0) return notify("Max budget must be a positive amount.", true);
+    // Phase C: assemble the network policy. An allowlist requires at least one host.
+    let networkPolicy: NetworkPolicy = { mode: "deny_all" };
+    if (apprNetMode === "allowlist") {
+      const hosts = apprNetHosts
+        .split(/[\n,]/)
+        .map((h) => h.trim().toLowerCase())
+        .filter((h) => h.length > 0);
+      if (hosts.length === 0) {
+        return notify("Add at least one allowed host, or switch to deny all.", true);
+      }
+      networkPolicy = { mode: "allowlist", hosts };
+    }
+    // http_fetch is only meaningful with an allowlist; include it then.
+    const toolAllowlist =
+      apprNetMode === "allowlist" && apprHttpFetch ? [...apprTools, HTTP_FETCH_TOOL] : apprTools;
     setApprBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: apprKitId };
       await jsonFetch<Approval>("/api/auto/approvals", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef, toolAllowlist: apprTools, maxBudgetCents: cents })
+        body: JSON.stringify({ kitRef, toolAllowlist, maxBudgetCents: cents, networkPolicy })
       });
       notify("Standing approval created.");
       await loadApprovals();
@@ -236,13 +300,50 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setRunBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: runKitId };
+
+      // Phase C: stage any selected input files first — request presigned PUT
+      // URLs, upload each file's bytes, then attach the returned manifest. The
+      // worker hydrates them into the run workspace inputs/ dir.
+      let inputFiles: { path: string; s3Key?: string }[] | undefined;
+      if (runInputFiles.length > 0) {
+        const { slots, inputFiles: manifest } = await jsonFetch<{
+          slots: { path: string; s3Key: string; uploadUrl: string }[];
+          inputFiles: { path: string; s3Key?: string }[];
+        }>("/api/auto/runs/inputs/upload-url", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            files: runInputFiles.map((f) => ({ path: f.name, contentType: f.type || "application/octet-stream" }))
+          })
+        });
+        // Upload each file's bytes to its presigned URL (order matches slots).
+        await Promise.all(
+          slots.map(async (slot, i) => {
+            const file = runInputFiles[i];
+            const put = await fetch(slot.uploadUrl, {
+              method: "PUT",
+              headers: { "content-type": file.type || "application/octet-stream" },
+              body: file
+            });
+            if (!put.ok) throw new Error(`Upload failed for ${file.name} (HTTP ${put.status}).`);
+          })
+        );
+        inputFiles = manifest;
+      }
+
       const { id } = await jsonFetch<{ id: string }>("/api/auto/runs", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef, input: { prompt: runPrompt }, budgetCents: cents })
+        body: JSON.stringify({
+          kitRef,
+          input: { prompt: runPrompt },
+          budgetCents: cents,
+          ...(inputFiles && inputFiles.length > 0 ? { inputFiles } : {})
+        })
       });
       notify("Run started.");
       setRunPrompt("");
+      setRunInputFiles([]);
       setOpenRunId(id);
       await loadRuns();
     } catch (e) {
@@ -322,6 +423,54 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     }
   };
 
+  const createWebhook = async () => {
+    if (!whKitId) return notify("Pick a kit (one with a standing approval).", true);
+    const approval = approvalForKit(whKitId);
+    if (!approval) return notify("That kit has no standing approval.", true);
+    const cents = Math.round(parseFloat(whBudgetUsd) * 100);
+    if (!Number.isInteger(cents) || cents <= 0) return notify("Per-fire budget is required (positive amount).", true);
+    setWhBusy(true);
+    try {
+      const kitRef: KitRef = { source: "local", localKitId: whKitId };
+      const created = await jsonFetch<CreatedWebhook>("/api/auto/webhooks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kitRef, budgetCents: cents, approvalId: approval.id })
+      });
+      // Show the plaintext secret + ingest URL ONCE — never retrievable again.
+      setWhSecret({ secret: created.secret, ingestUrl: created.ingestUrl });
+      notify("Webhook created. Copy the secret now — it is shown only once.");
+      await loadWebhooks();
+    } catch (e) {
+      notify(errMsg(e), true);
+    } finally {
+      setWhBusy(false);
+    }
+  };
+
+  const toggleWebhook = async (w: Webhook) => {
+    try {
+      await jsonFetch<Webhook>(`/api/auto/webhooks/${w.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: !w.enabled })
+      });
+      await loadWebhooks();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
+  const removeWebhook = async (id: string) => {
+    try {
+      await jsonFetch(`/api/auto/webhooks/${id}`, { method: "DELETE" });
+      notify("Webhook deleted.");
+      await loadWebhooks();
+    } catch (e) {
+      notify(errMsg(e), true);
+    }
+  };
+
   const kitLabel = (id?: string) => kits.find((k) => k.kitId === id)?.name ?? id ?? "(unknown kit)";
 
   return (
@@ -372,6 +521,44 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         <Field label="Max budget per run (USD)">
           <Input type="number" min="0.01" step="0.01" value={apprBudgetUsd} onChange={(e) => setApprBudgetUsd(e.target.value)} />
         </Field>
+
+        {/* ---- Network egress policy (Phase C) ---- */}
+        <Field label="Network access">
+          <Select value={apprNetMode} onChange={(e) => setApprNetMode(e.target.value as "deny_all" | "allowlist")}>
+            <option value="deny_all">Deny all (no network egress)</option>
+            <option value="allowlist">Allow listed hosts only</option>
+          </Select>
+        </Field>
+        {apprNetMode === "allowlist" && (
+          <>
+            <Field label="Allowed hosts (one per line; exact host or *.suffix)">
+              <Textarea
+                rows={3}
+                value={apprNetHosts}
+                onChange={(e) => setApprNetHosts(e.target.value)}
+                placeholder={"api.example.com\n*.githubusercontent.com"}
+              />
+            </Field>
+            <Field label="Outbound fetch tool">
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontWeight: 400 }}>
+                <input
+                  type="checkbox"
+                  style={{ width: "auto", minHeight: 0 }}
+                  checked={apprHttpFetch}
+                  onChange={(e) => setApprHttpFetch(e.target.checked)}
+                />
+                <span>
+                  Allow network fetch (<code>{HTTP_FETCH_TOOL}</code>)
+                </span>
+              </label>
+              <p className="form-copy" style={{ marginTop: 6 }}>
+                This grants the kit OUTBOUND network access to the hosts listed above (https only, SSRF-guarded).
+                The kit can read from and send data to those hosts on your behalf during a run.
+              </p>
+            </Field>
+          </>
+        )}
+
         <Button disabled={apprBusy} loading={apprBusy} onClick={() => void submitApproval()}>
           {apprBusy ? "Creating…" : "Create approval"}
         </Button>
@@ -388,6 +575,13 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                     <strong>{kitLabel(a.kitRef.localKitId)}</strong>
                     <div style={{ color: "var(--color-text-secondary)" }}>
                       {a.toolAllowlist.join(", ") || "no tools"} · ceiling {centsToUsd(a.maxBudgetCents)}
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                      {typeof a.networkPolicy === "object" && a.networkPolicy.mode === "allowlist" ? (
+                        <Pill tone="brand">net: {a.networkPolicy.hosts.join(", ")}</Pill>
+                      ) : (
+                        <Pill tone="neutral">net: deny all</Pill>
+                      )}
                     </div>
                   </div>
                   <Button variant="secondary" size="sm" onClick={() => void revoke(a.id)}>
@@ -418,6 +612,26 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         </Field>
         <Field label="This run's budget (USD, required)">
           <Input type="number" min="0.01" step="0.01" value={runBudgetUsd} onChange={(e) => setRunBudgetUsd(e.target.value)} />
+        </Field>
+        {/* ---- Input files (Phase C) ---- */}
+        <Field label="Input files (optional)">
+          <input
+            type="file"
+            multiple
+            onChange={(e) => setRunInputFiles(Array.from(e.target.files ?? []))}
+          />
+          {runInputFiles.length > 0 && (
+            <ul style={{ fontSize: "0.8em", margin: "6px 0 0", paddingLeft: 18 }}>
+              {runInputFiles.map((f) => (
+                <li key={f.name}>
+                  <code>inputs/{f.name}</code> ({f.size} bytes)
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="form-copy" style={{ marginTop: 6 }}>
+            Files are uploaded to your run&apos;s <code>inputs/</code> directory before it starts, so the kit can read them.
+          </p>
         </Field>
         <Button disabled={runBusy} loading={runBusy} onClick={() => void startRun()}>
           {runBusy ? "Starting…" : "Start run"}
@@ -482,6 +696,84 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                       {s.enabled ? "on" : "off"}
                     </label>
                     <Button variant="secondary" size="sm" onClick={() => void removeSchedule(s.id)}>
+                      Delete
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* ---- Webhooks (Phase C) ---- */}
+        <h3 style={{ marginTop: 24 }}>Webhooks</h3>
+        <p className="form-copy">
+          A webhook fires a run when a third-party service POSTs to its URL, authed by a per-webhook secret (no
+          login). Each fire is still gated by the kit&apos;s standing approval and a per-fire budget — a webhook
+          never widens consent.
+        </p>
+        <Field label="Kit (must have an approval)">
+          <Select value={whKitId} onChange={(e) => setWhKitId(e.target.value)}>
+            <option value="">Select a kit…</option>
+            {kits
+              .filter((k) => kitsWithApproval.includes(k.kitId))
+              .map((k) => (
+                <option key={k.kitId} value={k.kitId}>
+                  {k.name}
+                </option>
+              ))}
+          </Select>
+        </Field>
+        <Field label="Per-fire budget (USD, required)">
+          <Input type="number" min="0.01" step="0.01" value={whBudgetUsd} onChange={(e) => setWhBudgetUsd(e.target.value)} />
+        </Field>
+        <Button disabled={whBusy} loading={whBusy} onClick={() => void createWebhook()}>
+          {whBusy ? "Creating…" : "Create webhook"}
+        </Button>
+
+        {whSecret && (
+          <Card style={{ marginTop: 12, padding: "12px 14px" }}>
+            <h4 style={{ marginTop: 0 }}>Copy your webhook secret now</h4>
+            <p className="form-copy">
+              This secret is shown <strong>only once</strong> and is never retrievable again. Send it as the
+              <code> x-auto-webhook-secret</code> header (or <code>?token=</code> query param) when calling the URL.
+            </p>
+            <Field label="Ingest URL">
+              <Input type="text" readOnly value={whSecret.ingestUrl} onFocus={(e) => e.currentTarget.select()} />
+            </Field>
+            <Field label="Secret (shown once)">
+              <Input type="text" readOnly value={whSecret.secret} onFocus={(e) => e.currentTarget.select()} />
+            </Field>
+            <Button variant="secondary" size="sm" onClick={() => setWhSecret(null)}>
+              I&apos;ve copied it
+            </Button>
+          </Card>
+        )}
+
+        <div className="results-panel" style={{ marginTop: 16 }}>
+          <h4 style={{ marginTop: 0 }}>Active webhooks</h4>
+          {webhooks.length === 0 ? (
+            <p className="form-copy">No webhooks yet.</p>
+          ) : (
+            webhooks.map((w) => (
+              <div key={w.id} className="provider-card" style={{ marginBottom: 8, padding: "8px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: "0.85em", overflow: "hidden" }}>
+                    <strong>{kitLabel(w.kitRef.localKitId)}</strong>
+                    <div style={{ color: "var(--color-text-secondary)" }}>
+                      {centsToUsd(w.budgetCents)}/fire · fired {w.fireCount}× · last {fmtTs(w.lastFiredAt)}
+                    </div>
+                    <div style={{ color: "var(--color-text-secondary)", wordBreak: "break-all", fontSize: "0.9em" }}>
+                      <code>{w.ingestUrl}</code>
+                    </div>
+                    {w.lastError && <div style={{ color: "var(--color-error)" }}>last error: {w.lastError}</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontWeight: 400, fontSize: "0.8em" }}>
+                      <input type="checkbox" checked={w.enabled} onChange={() => void toggleWebhook(w)} />
+                      {w.enabled ? "on" : "off"}
+                    </label>
+                    <Button variant="secondary" size="sm" onClick={() => void removeWebhook(w.id)}>
                       Delete
                     </Button>
                   </div>

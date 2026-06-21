@@ -62,6 +62,13 @@ frontend:
         # AUTO_SCHEDULES_TABLE (Phase B) — OPTIONAL, baked, no preBuild gate (code
         # defaults to AutoSchedules in server/core/auto.ts).
         - 'printf "AUTO_SCHEDULES_TABLE=%s\n" "$AUTO_SCHEDULES_TABLE" >> .env.production'
+        # AUTO_WEBHOOKS_TABLE / AUTO_INPUTS_BUCKET / AUTO_INPUTS_PREFIX (Phase C) —
+        # OPTIONAL, baked, no preBuild gate. Code defaults: AutoWebhooks for the
+        # table; AUTO_INPUTS_BUCKET falls back to S3_BUCKET (input uploads return 503
+        # only if NEITHER is set); auto-inputs/ for the prefix.
+        - 'printf "AUTO_WEBHOOKS_TABLE=%s\n" "$AUTO_WEBHOOKS_TABLE" >> .env.production'
+        - 'printf "AUTO_INPUTS_BUCKET=%s\n" "$AUTO_INPUTS_BUCKET" >> .env.production'
+        - 'printf "AUTO_INPUTS_PREFIX=%s\n" "$AUTO_INPUTS_PREFIX" >> .env.production'
         # Auto BILLING MODEL — both OPTIONAL with code defaults (server/core/auto.ts:
         # AUTO_MARKUP_BPS=2500 / 25% on MANAGED Auto inference, separate from the
         # gateway's 15%; AUTO_CLOUD_RUN_CENTS_PER_MIN=1 per-minute compute fee on

@@ -32,21 +32,32 @@
 
 import {
   ApprovalDeniedError,
+  confineInputPath,
+  consumeWebhook,
   CronParseError,
+  generateWebhookSecret,
+  hashWebhookSecret,
+  inputObjectKey,
   makeAutoDeps,
   nextFireAfter,
+  normalizeNetworkPolicy,
   processAutoRun,
   runDueSchedules,
   validateCron,
+  WebhookError,
   type AutoApproval,
   type AutoBackend,
   type AutoRun,
+  type AutoRunInputFileRef,
   type AutoSchedule,
   type AutoStorageDeps,
+  type AutoWebhook,
   type CreateApprovalInput,
   type CreateRunInput,
   type CreateScheduleInput,
+  type CreateWebhookInput,
   type KitRef,
+  type NetworkPolicy,
   type ProcessAutoRunDeps,
   type ResolveKitContext,
   type ResolvedKitContext,
@@ -59,7 +70,9 @@ import {
   type ChatProvider,
   type ToolDefinition
 } from "@agentkitforge/gateway-core";
+import { randomUUID } from "node:crypto";
 import { awsClientEnv } from "@/server/aws-client";
+import { getAppUrl } from "@/lib/url-config";
 import { fargateDispatcher } from "@/server/core/auto-fargate-dispatcher";
 import { getBalanceCents, getCreditLedger } from "@/server/core/gateway";
 import { getUserSettingsStore } from "@/server/store/user-settings";
@@ -76,7 +89,7 @@ import {
 import type { StoredSession, TokenStore } from "@agentkitforge/core/market";
 
 export { ApprovalDeniedError };
-export type { AutoApproval, AutoRun, AutoSchedule, KitRef };
+export type { AutoApproval, AutoRun, AutoRunInputFileRef, AutoSchedule, AutoWebhook, KitRef, NetworkPolicy };
 
 // ---------------------------------------------------------------------------
 // Storage deps (singleton)
@@ -95,15 +108,26 @@ function autoBackend(): AutoBackend {
   return raw === "selfhost" ? "selfhost" : "aws";
 }
 
-function autoTableNames(): { runs: string; approvals: string; schedules: string } {
+function autoTableNames(): { runs: string; approvals: string; schedules: string; webhooks: string } {
   return {
     runs: process.env.AUTO_RUNS_TABLE || "AutoRuns",
     approvals: process.env.AUTO_APPROVALS_TABLE || "AutoApprovals",
     // Phase B: the standing-schedules table (auto-core's aws adapter requires it
     // via loadAutoDynamoTableNames; we always pass an explicit name so deployments
     // that haven't set the env still get the documented default).
-    schedules: process.env.AUTO_SCHEDULES_TABLE || "AutoSchedules"
+    schedules: process.env.AUTO_SCHEDULES_TABLE || "AutoSchedules",
+    // Phase C: the standing-webhooks table (auto-core's aws adapter requires all
+    // four names; we always pass an explicit default like the others).
+    webhooks: process.env.AUTO_WEBHOOKS_TABLE || "AutoWebhooks"
   };
+}
+
+/** The S3 bucket backing Phase C staged input files (`auto-inputs/{runId}/...`).
+ *  Reuses the kit-trees bucket via AUTO_INPUTS_BUCKET (defaulting to the KitStore
+ *  S3_BUCKET when unset). When unset entirely, auto-core's aws adapter falls back
+ *  to a LocalInputStore (fine for dev/tests). */
+function autoInputsBucket(): string | undefined {
+  return process.env.AUTO_INPUTS_BUCKET || process.env.S3_BUCKET || undefined;
 }
 
 /**
@@ -127,7 +151,15 @@ export async function getAutoStorage(): Promise<AutoStorageDeps> {
       region: env.region,
       ...(env.credentials ? { credentials: env.credentials } : {})
     });
-    storageSingleton = makeAutoDeps({ backend: "aws", db, tables: autoTableNames() });
+    const inputsBucket = autoInputsBucket();
+    storageSingleton = makeAutoDeps({
+      backend: "aws",
+      db,
+      tables: autoTableNames(),
+      // Phase C: when set, staged run-input files are read from S3 (auto-inputs/
+      // prefix) during hydration; otherwise auto-core uses a LocalInputStore.
+      ...(inputsBucket ? { inputsBucket } : {})
+    });
   }
   return storageSingleton;
 }
@@ -556,24 +588,78 @@ export class InsufficientComputeBalanceError extends Error {
   }
 }
 
-/** Create a standing approval. */
+/** The `http_fetch` sandbox tool. Available to a run ONLY when the approval's
+ *  networkPolicy is an allowlist AND `http_fetch` is in its toolAllowlist
+ *  (auto-core enforces both). The UI surfaces it as an opt-in checkbox. */
+export const HTTP_FETCH_TOOL = "http_fetch";
+
+/**
+ * Parses + validates a request body's networkPolicy into the auto-core Phase C
+ * shape, defaulting to deny_all. Accepts either the object shape
+ * ({ mode: "deny_all" } | { mode: "allowlist", hosts: [...] }) or the legacy
+ * bare "deny_all" string. An allowlist with no non-empty hosts is rejected
+ * (an empty allowlist would grant nothing yet still imply egress intent).
+ * Each host must be a non-empty string (exact hostname or `*.suffix`).
+ */
+export function parseNetworkPolicy(raw: unknown): NetworkPolicy {
+  // undefined/null/"deny_all" → deny_all (never widen consent).
+  if (raw === undefined || raw === null || raw === "deny_all") {
+    return { mode: "deny_all" };
+  }
+  if (typeof raw === "object") {
+    const r = raw as Record<string, unknown>;
+    if (r["mode"] === "deny_all") return { mode: "deny_all" };
+    if (r["mode"] === "allowlist") {
+      const hosts = Array.isArray(r["hosts"])
+        ? (r["hosts"] as unknown[])
+            .filter((h): h is string => typeof h === "string")
+            .map((h) => h.trim().toLowerCase())
+            .filter((h) => h.length > 0)
+        : [];
+      if (hosts.length === 0) {
+        throw new AutoValidationError(
+          "An allowlist network policy requires at least one host."
+        );
+      }
+      // De-dupe while preserving order.
+      const seen = new Set<string>();
+      const unique = hosts.filter((h) => (seen.has(h) ? false : (seen.add(h), true)));
+      return { mode: "allowlist", hosts: unique };
+    }
+  }
+  // Anything unrecognized normalizes to deny_all (auto-core does the same).
+  return normalizeNetworkPolicy(raw);
+}
+
+/** Create a standing approval. Phase C: an optional networkPolicy (deny_all
+ *  default, or an allowlist of hosts) opts the kit's runs into guarded https
+ *  egress. The `http_fetch` tool is honored only when it is BOTH in the
+ *  toolAllowlist AND the policy is an allowlist (auto-core enforces this); to
+ *  avoid a dead opt-in we drop `http_fetch` from the allowlist when the policy
+ *  is deny_all. */
 export async function createApproval(input: {
   userId: string;
   kitRef: KitRef;
   toolAllowlist: string[];
   maxBudgetCents: number;
+  networkPolicy?: NetworkPolicy;
 }): Promise<AutoApproval> {
   if (!Number.isInteger(input.maxBudgetCents) || input.maxBudgetCents <= 0) {
     throw new AutoValidationError("maxBudgetCents must be a positive integer (US cents).");
   }
+  const networkPolicy = input.networkPolicy ?? { mode: "deny_all" };
+  const toolAllowlist =
+    networkPolicy.mode === "allowlist"
+      ? input.toolAllowlist
+      : input.toolAllowlist.filter((t) => t !== HTTP_FETCH_TOOL);
   const storage = await getAutoStorage();
   const createInput: CreateApprovalInput = {
     userId: input.userId,
     kitRef: input.kitRef,
-    toolAllowlist: input.toolAllowlist,
+    toolAllowlist,
     maxBudgetCents: input.maxBudgetCents,
     scope: "workspace_read_write",
-    networkPolicy: "deny_all",
+    networkPolicy,
     createdAt: now()
   };
   return storage.approvals.createApproval(createInput);
@@ -613,13 +699,19 @@ export async function startRun(input: {
   budgetCents: number;
   model?: string;
   files?: { path: string; content: string }[];
+  /** Phase C: out-of-band staged input files (uploaded to S3 via presigned PUT).
+   *  Persisted on the run as `inputFiles`; the worker hydrates them into the
+   *  workspace `inputs/` dir before execution. */
+  inputFiles?: AutoRunInputFileRef[];
   kitContext: KitContextOptions;
   /** How this run was triggered. Defaults to "on_demand" (Phase A). The Phase B
-   *  scheduler passes "schedule" + scheduleId so the SAME create + gate + dispatch
-   *  path is reused for cron-fired runs. */
-  trigger?: "on_demand" | "schedule";
+   *  scheduler passes "schedule" + scheduleId; the Phase C webhook consumer passes
+   *  "webhook" + webhookId — the SAME create + gate + dispatch path is reused. */
+  trigger?: "on_demand" | "schedule" | "webhook";
   /** The AutoSchedule that produced this run (only with trigger "schedule"). */
   scheduleId?: string;
+  /** The AutoWebhook that produced this run (only with trigger "webhook"). */
+  webhookId?: string;
 }): Promise<AutoRun> {
   if (typeof input.prompt !== "string" || input.prompt.trim().length === 0) {
     throw new AutoValidationError("A run input prompt is required.");
@@ -693,7 +785,11 @@ export async function startRun(input: {
     // Phase B provenance: scheduler-fired runs carry trigger "schedule" +
     // scheduleId; on-demand runs default to "on_demand" (back-compat).
     trigger: input.trigger ?? "on_demand",
-    ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {})
+    ...(input.scheduleId !== undefined ? { scheduleId: input.scheduleId } : {}),
+    // Phase C: webhook-fired runs carry trigger "webhook" + webhookId.
+    ...(input.webhookId !== undefined ? { webhookId: input.webhookId } : {}),
+    // Phase C: out-of-band staged input-file manifest (hydrated by the worker).
+    ...(input.inputFiles && input.inputFiles.length > 0 ? { inputFiles: input.inputFiles } : {})
   };
   const run = await storage.runs.createRun(createInput);
 
@@ -1142,6 +1238,324 @@ export async function runScheduleSweep(): Promise<ScheduleSweepSummary> {
 
   return runDueSchedules({
     deps: { schedules: storage.schedules, approvals: storage.approvals },
+    now: now(),
+    createAndDispatch
+  });
+}
+
+// ===========================================================================
+// AgentKitAuto — Phase C: user-provided run inputs (presigned S3 upload)
+//
+// The browser/Forge uploads each input file's BYTES directly to S3 via a
+// presigned PUT URL we issue here, under the per-run-pending input prefix
+// `auto-inputs/{stagingId}/...`. The resulting manifest (workspace-relative
+// path + S3 key) is then threaded into startRun as `inputFiles`; the worker
+// (auto-core's S3InputStore) GETs each object and hydrates it into the run
+// workspace `inputs/` dir before execution.
+//
+// SAFETY: filenames are path-confined (auto-core's confineInputPath rejects
+// absolute paths + `..` traversal); the S3 key always lives under the
+// `auto-inputs/` prefix the SSR user is scoped to. We presign on the SAME
+// FORGE_AWS_* credentials/region as the rest of the app.
+// ===========================================================================
+
+/** A single presigned input-upload slot returned to the client. */
+export interface InputUploadSlot {
+  /** Workspace-relative path under `inputs/` (path-confined). */
+  path: string;
+  /** The S3 object key the client PUTs to (under `auto-inputs/`). */
+  s3Key: string;
+  /** The presigned PUT URL (expires shortly). */
+  uploadUrl: string;
+}
+
+/** Thrown when input uploads are requested but no S3 inputs bucket is configured. */
+export class InputStorageUnconfiguredError extends Error {
+  constructor() {
+    super("Run input uploads require an S3 inputs bucket (AUTO_INPUTS_BUCKET).");
+    this.name = "InputStorageUnconfiguredError";
+  }
+}
+
+/**
+ * Issue presigned S3 PUT URLs for a batch of run input files. Returns one slot
+ * per file (confined path + S3 key + URL) plus the `inputFiles` MANIFEST to
+ * thread into startRun. `stagingId` namespaces this batch's objects (a random
+ * id, NOT yet the run id — the run is created after the uploads succeed); the
+ * S3InputStore reads the manifest's explicit `s3Key`, so the staging id never
+ * needs to match the eventual run id.
+ *
+ * @throws AutoValidationError           on an empty/invalid file list or bad path.
+ * @throws InputStorageUnconfiguredError when no inputs bucket is configured.
+ */
+export async function createInputUploadUrls(input: {
+  userId: string;
+  files: { path: string; contentType?: string }[];
+}): Promise<{ stagingId: string; slots: InputUploadSlot[]; inputFiles: AutoRunInputFileRef[] }> {
+  if (!Array.isArray(input.files) || input.files.length === 0) {
+    throw new AutoValidationError("At least one input file is required.");
+  }
+  if (input.files.length > 20) {
+    throw new AutoValidationError("At most 20 input files may be uploaded per run.");
+  }
+  const bucket = autoInputsBucket();
+  if (!bucket) {
+    throw new InputStorageUnconfiguredError();
+  }
+
+  // The staging id namespaces this batch under the per-user input prefix; it is
+  // randomised and includes the userId so a leaked URL can't target another
+  // user's prefix (the SSR user is scoped to auto-inputs/* regardless).
+  const stagingId = `${input.userId}/${randomUUID()}`;
+
+  const { S3Client, PutObjectCommand } = await import("@aws-sdk/client-s3");
+  const { getSignedUrl } = await import("@aws-sdk/s3-request-presigner");
+  const env = awsClientEnv();
+  const client = new S3Client({
+    region: env.region,
+    ...(env.credentials ? { credentials: env.credentials } : {})
+  });
+
+  const slots: InputUploadSlot[] = [];
+  const inputFiles: AutoRunInputFileRef[] = [];
+  for (const f of input.files) {
+    let confined: string;
+    try {
+      confined = confineInputPath(typeof f.path === "string" ? f.path : "");
+    } catch {
+      throw new AutoValidationError(`Invalid input file path: ${String(f.path)}`);
+    }
+    // inputObjectKey builds the canonical `auto-inputs/{stagingId}/{tail}` key.
+    const s3Key = inputObjectKey(stagingId, confined);
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: s3Key,
+      ...(typeof f.contentType === "string" && f.contentType ? { ContentType: f.contentType } : {})
+    });
+    const uploadUrl = await getSignedUrl(client, command, { expiresIn: 900 });
+    slots.push({ path: confined, s3Key, uploadUrl });
+    inputFiles.push({ path: confined, s3Key });
+  }
+  return { stagingId, slots, inputFiles };
+}
+
+/** Normalizes a request body's inputFiles manifest (path + s3Key) into typed
+ *  AutoRunInputFileRefs, re-confining each path. Drops malformed entries. Shared
+ *  by both auth paths' run-create routes. */
+export function parseInputFiles(raw: unknown): AutoRunInputFileRef[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AutoRunInputFileRef[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const rec = r as Record<string, unknown>;
+    if (typeof rec["path"] !== "string") continue;
+    let confined: string;
+    try {
+      confined = confineInputPath(rec["path"]);
+    } catch {
+      continue;
+    }
+    out.push({
+      path: confined,
+      ...(typeof rec["s3Key"] === "string" && rec["s3Key"] ? { s3Key: rec["s3Key"] } : {})
+    });
+  }
+  return out;
+}
+
+// ===========================================================================
+// AgentKitAuto — Phase C: inbound webhook triggers
+//
+// A standing AutoWebhook fires an autonomous run of a kit when a third-party
+// service POSTs to its public ingest URL, authed ONLY by a per-webhook SECRET
+// (the FOURTH auth path — never cookie/bearer/service-key). The fire logic
+// (secret verify + approval gate + run create + dispatch + recordFire) lives in
+// auto-core's consumeWebhook; this module only:
+//   - validates + persists webhooks (CRUD), reusing the approval gate;
+//   - generates the plaintext secret server-side, stores ONLY its hash, and
+//     returns the plaintext ONCE on create (never retrievable again);
+//   - provides the injected createAndDispatch that turns a fire into a run via
+//     the EXACT same startRun path schedules use, stamping trigger "webhook".
+//
+// AUTH: webhook CRUD is userId-keyed and called by both the cookie + bearer
+// paths exactly like runs/approvals/schedules. The INGEST is the fourth path
+// (per-webhook secret), handled in the public /api/hooks route.
+// ===========================================================================
+
+/** Re-checks that a non-revoked standing approval for (userId, kitRef) exists,
+ *  covers budgetCents, AND matches the supplied approvalId — exactly like
+ *  requireScheduleApproval. A webhook never widens consent. */
+async function requireWebhookApproval(input: {
+  userId: string;
+  kitRef: KitRef;
+  budgetCents: number;
+  approvalId: string;
+}): Promise<AutoApproval> {
+  const storage = await getAutoStorage();
+  const approval = await storage.approvals.getApprovalForKit(input.userId, input.kitRef);
+  if (!approval) {
+    throw new ApprovalDeniedError("No standing approval exists for this kit. Create one first.");
+  }
+  if (approval.revokedAt !== null) {
+    throw new ApprovalDeniedError("The standing approval for this kit has been revoked.");
+  }
+  if (approval.id !== input.approvalId) {
+    throw new AutoValidationError("approvalId does not match the standing approval for this kit.");
+  }
+  if (input.budgetCents > approval.maxBudgetCents) {
+    throw new ApprovalDeniedError(
+      `Webhook budget (${input.budgetCents}¢) exceeds the approval ceiling (${approval.maxBudgetCents}¢).`
+    );
+  }
+  return approval;
+}
+
+/** The create-webhook result: the persisted webhook PLUS the one-time plaintext
+ *  secret + the ingest URL. The secret is shown to the user ONCE and is NEVER
+ *  retrievable again (only its hash is stored). */
+export interface CreatedWebhook {
+  webhook: AutoWebhook;
+  /** The plaintext shared secret — shown ONCE; never stored or retrievable. */
+  secret: string;
+  /** The public ingest URL the third-party service POSTs to. */
+  ingestUrl: string;
+}
+
+/**
+ * Create a standing webhook. Validates the standing approval (must belong to the
+ * user + match kitRef + cover the budget), generates a random secret, stores
+ * ONLY its hash, and returns the plaintext secret + ingest URL ONCE.
+ *
+ * @throws AutoValidationError  bad budget/model/approval mismatch (→ 400).
+ * @throws ApprovalDeniedError  no matching/over-ceiling approval (→ 403).
+ */
+export async function createWebhook(input: {
+  userId: string;
+  kitRef: KitRef;
+  budgetCents: number;
+  model?: string;
+  approvalId: string;
+}): Promise<CreatedWebhook> {
+  if (!Number.isInteger(input.budgetCents) || input.budgetCents <= 0) {
+    throw new AutoValidationError("budgetCents is required and must be a positive integer (US cents).");
+  }
+  if (typeof input.approvalId !== "string" || input.approvalId.trim().length === 0) {
+    throw new AutoValidationError("approvalId is required.");
+  }
+  await requireWebhookApproval({
+    userId: input.userId,
+    kitRef: input.kitRef,
+    budgetCents: input.budgetCents,
+    approvalId: input.approvalId
+  });
+
+  const model = isManagedModel(input.model) ? input.model! : MANAGED_DEFAULT_MODEL;
+  // Generate the plaintext secret server-side; persist ONLY its sha256 hash.
+  const secret = generateWebhookSecret();
+  const storage = await getAutoStorage();
+  const createInput: CreateWebhookInput = {
+    userId: input.userId,
+    kitRef: input.kitRef,
+    approvalId: input.approvalId,
+    budgetCents: input.budgetCents,
+    model,
+    enabled: true,
+    secretHash: hashWebhookSecret(secret),
+    createdAt: now()
+  };
+  const webhook = await storage.webhooks.createWebhook(createInput);
+  return { webhook, secret, ingestUrl: webhookIngestUrl(webhook.id) };
+}
+
+/** Build the public ingest URL for a webhook id (`${APP_URL}/api/hooks/auto/{id}`). */
+export function webhookIngestUrl(webhookId: string): string {
+  const base = getAppUrl().replace(/\/$/, "");
+  return `${base}/api/hooks/auto/${webhookId}`;
+}
+
+/** List a user's webhooks (the secretHash is never exposed by the routes; this
+ *  returns the raw records — routes strip secretHash before responding). */
+export async function listWebhooks(userId: string): Promise<AutoWebhook[]> {
+  const storage = await getAutoStorage();
+  return storage.webhooks.listWebhooksByUser(userId);
+}
+
+/** Get a single webhook, ownership-checked. Null for missing/cross-user (→ 404). */
+export async function getWebhook(userId: string, webhookId: string): Promise<AutoWebhook | null> {
+  const storage = await getAutoStorage();
+  const w = await storage.webhooks.getWebhook(webhookId);
+  if (!w || w.userId !== userId) return null;
+  return w;
+}
+
+/** Enable/disable a webhook, ownership-checked. Null for missing/cross-user. */
+export async function setWebhookEnabled(
+  userId: string,
+  webhookId: string,
+  enabled: boolean
+): Promise<AutoWebhook | null> {
+  const storage = await getAutoStorage();
+  const w = await storage.webhooks.getWebhook(webhookId);
+  if (!w || w.userId !== userId) return null;
+  const updated = await storage.webhooks.setEnabled(webhookId, enabled);
+  return updated ?? null;
+}
+
+/** Delete a webhook, ownership-checked. False for missing/cross-user (→ 404). */
+export async function deleteWebhook(userId: string, webhookId: string): Promise<boolean> {
+  const storage = await getAutoStorage();
+  const w = await storage.webhooks.getWebhook(webhookId);
+  if (!w || w.userId !== userId) return false;
+  await storage.webhooks.deleteWebhook(webhookId);
+  return true;
+}
+
+export { WebhookError };
+
+/**
+ * Consume an inbound webhook fire (the FOURTH auth path — secret only). Verifies
+ * the presented secret (constant-time, via auto-core's hash compare), re-checks
+ * the standing approval, creates a run with trigger "webhook" + webhookId, and
+ * dispatches it via the EXACT same startRun path schedules use (SERVICE MODE —
+ * the webhook's userId drives kit-context resolution, no user session).
+ *
+ * Returns the created AutoRun. Throws WebhookError (typed reason) which the
+ * ingest route maps to a status (401 for not_found/disabled/bad_secret so a
+ * caller can't probe which webhooks exist; 403 for approval/budget).
+ *
+ * NEVER logs the secret.
+ */
+export async function fireWebhook(input: {
+  webhookId: string;
+  providedSecret: string;
+  payload?: unknown;
+}): Promise<AutoRun> {
+  const storage = await getAutoStorage();
+
+  const createAndDispatch = async (createInput: CreateRunInput): Promise<AutoRun> => {
+    // SERVICE MODE: no user session. The webhook's userId drives kit-context
+    // resolution (protected Market kits resolve server-to-service via
+    // MARKET_SERVICE_KEY). Mirrors the schedule sweep's createAndDispatch — we
+    // re-route through startRun so the approval gate + billing + dispatch are
+    // identical to an on-demand run, stamping trigger "webhook" + webhookId.
+    return startRun({
+      userId: createInput.userId,
+      kitRef: createInput.kitRef,
+      prompt: createInput.input.prompt,
+      budgetCents: createInput.budgetCents,
+      ...(createInput.model ? { model: createInput.model } : {}),
+      kitContext: { serviceUserId: createInput.userId },
+      trigger: "webhook",
+      ...(createInput.webhookId !== undefined ? { webhookId: createInput.webhookId } : {}),
+      ...(createInput.inputFiles ? { inputFiles: createInput.inputFiles } : {})
+    });
+  };
+
+  return consumeWebhook({
+    deps: { webhooks: storage.webhooks, approvals: storage.approvals },
+    webhookId: input.webhookId,
+    providedSecret: input.providedSecret,
+    payload: input.payload,
     now: now(),
     createAndDispatch
   });

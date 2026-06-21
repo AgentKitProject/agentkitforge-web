@@ -11,7 +11,8 @@ import {
   AutoValidationError,
   createApproval,
   listApprovals,
-  parseKitRef
+  parseKitRef,
+  parseNetworkPolicy
 } from "@/server/core/auto";
 
 export const dynamic = "force-dynamic";
@@ -31,6 +32,7 @@ export async function POST(request: Request) {
     kitRef?: unknown;
     toolAllowlist?: unknown;
     maxBudgetCents?: unknown;
+    networkPolicy?: unknown;
   };
 
   try {
@@ -39,7 +41,8 @@ export async function POST(request: Request) {
       ? body.toolAllowlist.filter((t): t is string => typeof t === "string")
       : [];
     const maxBudgetCents = typeof body.maxBudgetCents === "number" ? body.maxBudgetCents : NaN;
-    const approval = await createApproval({ userId, kitRef, toolAllowlist, maxBudgetCents });
+    const networkPolicy = parseNetworkPolicy(body.networkPolicy);
+    const approval = await createApproval({ userId, kitRef, toolAllowlist, maxBudgetCents, networkPolicy });
     return Response.json(approval, { status: 201 });
   } catch (error) {
     if (error instanceof AutoValidationError) {
