@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { Button, Field, Input, Textarea } from "@agentkitforge/ui";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 
@@ -25,7 +26,7 @@ export function MarketSubmitSection({
                 <h3>{k.name ?? k.kitId}</h3>
                 <p className="inline-code">{k.kitId}</p>
                 <div className="button-row">
-                  <button className="primary-button" onClick={() => onPick(k.kitId)}>Submit this kit</button>
+                  <Button onClick={() => onPick(k.kitId)}>Submit this kit</Button>
                 </div>
               </article>
             ))}
@@ -84,15 +85,15 @@ export function SubmitModal({
       <div className="modal-card">
         <div className="modal-head">
           <h2>Submit to AgentKitMarket</h2>
-          <button className="secondary-button" onClick={onClose}>Close</button>
+          <Button variant="secondary" onClick={onClose}>Close</Button>
         </div>
         <p className="form-copy">Listing fields are an optional draft — the server resolves the publisher from your AgentKitProfile and owns slug/version.</p>
-        <div className="field"><label>Listing name (optional)</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>
-        <div className="field"><label>Summary (optional)</label><input value={summary} onChange={(e) => setSummary(e.target.value)} /></div>
-        <div className="field"><label>Description (optional)</label><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></div>
-        <div className="field"><label>Categories (comma-separated)</label><input value={categories} onChange={(e) => setCategories(e.target.value)} /></div>
-        <div className="field"><label>Tags (comma-separated)</label><input value={tags} onChange={(e) => setTags(e.target.value)} /></div>
-        <button className="primary-button" disabled={busy} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit for review"}</button>
+        <Field label="Listing name (optional)"><Input value={name} onChange={(e) => setName(e.target.value)} /></Field>
+        <Field label="Summary (optional)"><Input value={summary} onChange={(e) => setSummary(e.target.value)} /></Field>
+        <Field label="Description (optional)"><Textarea value={description} onChange={(e) => setDescription(e.target.value)} /></Field>
+        <Field label="Categories (comma-separated)"><Input value={categories} onChange={(e) => setCategories(e.target.value)} /></Field>
+        <Field label="Tags (comma-separated)"><Input value={tags} onChange={(e) => setTags(e.target.value)} /></Field>
+        <Button disabled={busy} loading={busy} onClick={() => void submit()}>{busy ? "Submitting…" : "Submit for review"}</Button>
         {result && (
           <p className="form-copy" style={{ marginTop: 4 }}>
             Status: <strong>{result.status}</strong> · Submission {result.submissionId}

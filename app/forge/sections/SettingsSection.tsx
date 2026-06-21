@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Badge, Button, Field, Input, Select } from "@agentkitforge/ui";
 import type { CatalogEntry, Forge, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
 import { CreditsPanel } from "./CreditsPanel";
@@ -85,12 +86,12 @@ export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notif
           <div className="provider-list">
             {providers.map((p) => (
               <article className="provider-card" key={p.id}>
-                <h3>{p.name} {p.id === defaultId && <span className="source-badge">default</span>}</h3>
+                <h3>{p.name} {p.id === defaultId && <Badge tone="success">default</Badge>}</h3>
                 <p>{p.providerType} · {p.defaultModel || "no model"} · <span className={`secret-status ${p.hasApiKey ? "saved" : ""}`}>{p.hasApiKey ? "key set" : "no key"}</span></p>
                 <div className="button-row">
-                  {p.id !== defaultId && <button className="secondary-button" onClick={guard(() => forge.setDefaultAiProvider(p.id), "Default provider set.")}>Make default</button>}
-                  <button className="secondary-button" onClick={() => void test(p.id)}>Test</button>
-                  <button className="danger-button" onClick={guard(() => forge.removeAiProvider(p.id), "Provider removed.")}>Remove</button>
+                  {p.id !== defaultId && <Button variant="secondary" onClick={guard(() => forge.setDefaultAiProvider(p.id), "Default provider set.")}>Make default</Button>}
+                  <Button variant="secondary" onClick={() => void test(p.id)}>Test</Button>
+                  <Button variant="danger" onClick={guard(() => forge.removeAiProvider(p.id), "Provider removed.")}>Remove</Button>
                 </div>
               </article>
             ))}
@@ -100,45 +101,40 @@ export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notif
 
       <div className="settings-panel">
         <h2>Add / update a provider</h2>
-        <div className="field">
-          <label>Provider type</label>
-          <select value={providerType} onChange={(e) => setProviderType(e.target.value)}>
+        <Field label="Provider type">
+          <Select value={providerType} onChange={(e) => setProviderType(e.target.value)}>
             {catalog.length === 0 && <option value="openai">openai</option>}
             {catalog.map((c) => (
               <option key={c.providerType} value={c.providerType}>{c.providerType}</option>
             ))}
-          </select>
-        </div>
-        <div className="field">
-          <label>Display name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder={providerType} />
-        </div>
-        <div className="field">
-          <label>Default model</label>
+          </Select>
+        </Field>
+        <Field label="Display name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={providerType} />
+        </Field>
+        <Field label="Default model">
           {cat && cat.models.length > 0 ? (
-            <select value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}>
+            <Select value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}>
               <option value="">{cat.defaultModel ? `default (${cat.defaultModel})` : "select…"}</option>
               {cat.models.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
-            </select>
+            </Select>
           ) : (
-            <input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} />
+            <Input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)} />
           )}
-        </div>
+        </Field>
         {cat?.baseUrlRequired && (
-          <div className="field">
-            <label>Base URL</label>
-            <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://…" />
-          </div>
+          <Field label="Base URL">
+            <Input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} placeholder="https://…" />
+          </Field>
         )}
         {(cat?.apiKeyRequired ?? true) && (
-          <div className="field">
-            <label>API key (stored server-side, not echoed back)</label>
-            <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
-          </div>
+          <Field label="API key (stored server-side, not echoed back)">
+            <Input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} />
+          </Field>
         )}
-        <button className="primary-button" disabled={busy} onClick={() => void add()}>{busy ? "Saving…" : "Save provider"}</button>
+        <Button disabled={busy} loading={busy} onClick={() => void add()}>{busy ? "Saving…" : "Save provider"}</Button>
       </div>
     </div>
   );

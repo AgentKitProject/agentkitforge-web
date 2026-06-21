@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { Badge, Button, Select } from "@agentkitforge/ui";
 import { FileIcon, PackageIcon, PlugIcon } from "../icons";
 import type { Forge, Notify, ValidationReport } from "./shared";
 import { errMsg } from "./shared";
@@ -124,27 +125,27 @@ export function KitEditor({
   return (
     <div className="build-screen">
       <div className="screen-toolbar">
-        <button className="secondary-button" onClick={onClose}>← My Kits</button>
+        <Button variant="secondary" onClick={onClose}>← My Kits</Button>
         <div className="button-row">
-          <button
+          <Button
             type="button"
-            className="secondary-button"
+            variant="secondary"
             onClick={() => setMetaOpen((o) => !o)}
             title="Kit metadata & version"
           >
-            {summary?.name ?? kitId} {summary?.version && <span className="source-badge" style={{ marginLeft: 4 }}>v{summary.version}</span>}
-          </button>
-          <select style={{ width: "auto", minWidth: 150 }} value={profile} onChange={(e) => setProfile(e.target.value as ValidationProfile)}>
+            {summary?.name ?? kitId} {summary?.version && <Badge tone="neutral" style={{ marginLeft: 4 }}>v{summary.version}</Badge>}
+          </Button>
+          <Select style={{ width: "auto", minWidth: 150 }} value={profile} onChange={(e) => setProfile(e.target.value as ValidationProfile)}>
             <option value="local-valid">local-valid</option>
             <option value="publishable">publishable</option>
             <option value="trusted">trusted</option>
             <option value="verified">verified</option>
-          </select>
-          <button className="secondary-button" onClick={() => forge.validateAgentKit({ rootPath: kitId, profile }).then(setReport, (e) => notify(errMsg(e), true))}>Validate</button>
-          <button className="secondary-button" onClick={act("Package downloaded", () => forge.packageAgentKit({ rootPath: kitId, outputFolder: "" }))}>Package</button>
-          <button className="secondary-button" onClick={act("One-file exported", () => forge.exportAgentKitOneFile({ rootPath: kitId, outputPath: "" }))}>One-file</button>
-          <button className="secondary-button" onClick={act("Claude Code export", () => forge.exportAgentKitToClaudeCode({ kitPath: kitId, destinationDir: "", force: true }))}>→ Claude Code</button>
-          <button className="secondary-button" onClick={act("Codex export", () => forge.exportAgentKitToCodex({ kitPath: kitId, destinationSkillsDir: "", force: true }))}>→ Codex</button>
+          </Select>
+          <Button variant="secondary" onClick={() => forge.validateAgentKit({ rootPath: kitId, profile }).then(setReport, (e) => notify(errMsg(e), true))}>Validate</Button>
+          <Button variant="secondary" onClick={act("Package downloaded", () => forge.packageAgentKit({ rootPath: kitId, outputFolder: "" }))}>Package</Button>
+          <Button variant="secondary" onClick={act("One-file exported", () => forge.exportAgentKitOneFile({ rootPath: kitId, outputPath: "" }))}>One-file</Button>
+          <Button variant="secondary" onClick={act("Claude Code export", () => forge.exportAgentKitToClaudeCode({ kitPath: kitId, destinationDir: "", force: true }))}>→ Claude Code</Button>
+          <Button variant="secondary" onClick={act("Codex export", () => forge.exportAgentKitToCodex({ kitPath: kitId, destinationSkillsDir: "", force: true }))}>→ Codex</Button>
         </div>
       </div>
 
@@ -160,23 +161,25 @@ export function KitEditor({
                 <p style={{ margin: "0 0 4px" }}>
                   <strong>Version:</strong> <span className="inline-code">v{summary.version}</span>
                   {versionInfo?.next && (
-                    <button
-                      className="secondary-button"
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       style={{ marginLeft: 10, fontSize: "0.8em", padding: "2px 10px" }}
                       disabled={bumpBusy}
+                      loading={bumpBusy}
                       onClick={() => void bumpVersion()}
                     >
                       {bumpBusy ? "Bumping…" : `Bump → v${versionInfo.next}`}
-                    </button>
+                    </Button>
                   )}
                 </p>
               )}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <a className="secondary-button" style={{ textDecoration: "none" }} href={`https://market.agentkitproject.com/kits/${summary?.id ?? kitId}`} target="_blank" rel="noreferrer">
+              <Button variant="secondary" style={{ textDecoration: "none" }} href={`https://market.agentkitproject.com/kits/${summary?.id ?? kitId}`} target="_blank" rel="noreferrer">
                 <StoreIconSmall /> View on Market
-              </a>
-              <button className="secondary-button" onClick={() => setMetaOpen(false)}>Close</button>
+              </Button>
+              <Button variant="secondary" onClick={() => setMetaOpen(false)}>Close</Button>
             </div>
           </div>
         </div>
@@ -194,7 +197,7 @@ export function KitEditor({
               <>
                 <textarea className="code-area" value={content} onChange={(e) => { setContent(e.target.value); setDirty(true); }} />
                 <div className="button-row" style={{ marginTop: 10 }}>
-                  <button className="primary-button" disabled={!dirty} onClick={() => void save()}>Save file</button>
+                  <Button disabled={!dirty} onClick={() => void save()}>Save file</Button>
                 </div>
               </>
             ) : (
@@ -261,7 +264,7 @@ function ValidationReportPanel({
           <strong>Validation · {profile}</strong>
           <span>{isValid ? "PASSED" : "FAILED"}</span>
         </div>
-        <button className="secondary-button" style={{ flexShrink: 0 }} onClick={onClose}>Close</button>
+        <Button variant="secondary" style={{ flexShrink: 0 }} onClick={onClose}>Close</Button>
       </div>
 
       {issues.length === 0 && isValid && (

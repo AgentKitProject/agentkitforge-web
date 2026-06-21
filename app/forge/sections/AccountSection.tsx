@@ -1,5 +1,6 @@
 "use client";
 
+import { Badge, Button } from "@agentkitforge/ui";
 import type { SessionUser } from "./shared";
 
 const MARKET_BASE_URL =
@@ -16,8 +17,8 @@ export function AccountSection({ user }: { user: SessionUser }) {
           <p className="form-copy">On the web, your AgentKitProject account is the AuthKit cookie session — there is no separate device login. Market submit and licensed previews use this session.</p>
         </div>
         <div className="button-row">
-          <a className="secondary-button" href="/auth/sign-out">Sign out</a>
-          <a className="secondary-button" href="https://profile.agentkitproject.com" target="_blank" rel="noreferrer">Manage profile</a>
+          <Button variant="secondary" href="/auth/sign-out">Sign out</Button>
+          <Button variant="secondary" href="https://profile.agentkitproject.com" target="_blank" rel="noreferrer">Manage profile</Button>
         </div>
       </div>
 
@@ -40,11 +41,11 @@ export function AccountSection({ user }: { user: SessionUser }) {
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: "0.82em", color: "var(--color-text-secondary)", minWidth: 100 }}>Submit</span>
-                <span className="source-badge" style={{ fontSize: "0.78em" }}>Available — requires sign-in</span>
+                <Badge tone="success">Available — requires sign-in</Badge>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: "0.82em", color: "var(--color-text-secondary)", minWidth: 100 }}>Import</span>
-                <span className="source-badge" style={{ fontSize: "0.78em" }}>Available — requires sign-in</span>
+                <Badge tone="success">Available — requires sign-in</Badge>
               </div>
             </div>
           </div>
@@ -59,13 +60,13 @@ export function AccountSection({ user }: { user: SessionUser }) {
           </div>
         </div>
         <div className="button-row" style={{ marginTop: 12 }}>
-          <a className="secondary-button" href="https://market.agentkitproject.com" target="_blank" rel="noreferrer">Open AgentKitMarket</a>
+          <Button variant="secondary" href="https://market.agentkitproject.com" target="_blank" rel="noreferrer">Open AgentKitMarket</Button>
         </div>
       </div>
 
       {/* AgentKitAuto placeholder */}
       <div className="account-panel" style={{ marginTop: 20 }}>
-        <h2>AgentKitAuto <span className="source-badge" style={{ marginLeft: 6, fontSize: "0.75em" }}>Coming soon</span></h2>
+        <h2>AgentKitAuto <Badge tone="neutral" style={{ marginLeft: 6 }}>Coming soon</Badge></h2>
         <p className="form-copy">
           AgentKitAuto enables automated kit workflows. It requires explicit opt-in and will never run background operations without your permission. Full build-out is planned after Market Phase 2.
         </p>

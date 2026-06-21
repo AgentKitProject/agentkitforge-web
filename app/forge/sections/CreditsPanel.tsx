@@ -11,6 +11,7 @@
 // call POST /api/credits/topup → Stripe Checkout → webhook credits the ledger.
 // Returns are handled via ?topup=success|cancelled query params.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button } from "@agentkitforge/ui";
 import type { Notify } from "./shared";
 import { errMsg } from "./shared";
 import { TOP_UP_PRESETS_CENTS } from "@/lib/topup-presets";
@@ -144,23 +145,23 @@ export function CreditsPanel({
           Managed AI uses prepaid credits (used when you have no AI provider configured).
         </span>
         {showDevGrant && (
-          <button className="secondary-button" disabled={anyBusy} onClick={() => void devGrant()}>
+          <Button variant="secondary" disabled={anyBusy} onClick={() => void devGrant()}>
             {busy ? "…" : "+ $5 (dev/admin)"}
-          </button>
+          </Button>
         )}
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: "0.85em", color: "var(--color-text-secondary)" }}>Top up:</span>
         {TOP_UP_PRESETS.map(({ cents, label }) => (
-          <button
+          <Button
             key={cents}
-            className="secondary-button"
+            variant="secondary"
             disabled={anyBusy}
             onClick={() => void startTopup(cents)}
             title={`Add ${label} of prepaid credits`}
           >
             {topupBusy === cents ? "…" : label}
-          </button>
+          </Button>
         ))}
         <span style={{ fontSize: "0.78em", color: "var(--color-text-secondary)" }}>
           Credits are non-refundable.
@@ -230,15 +231,14 @@ export function InsufficientCreditsBanner({
       <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span style={{ fontSize: "0.85em" }}>Top up:</span>
         {TOP_UP_PRESETS.map(({ cents, label }) => (
-          <button
+          <Button
             key={cents}
-            className="primary-button"
             disabled={topupBusy !== null}
             onClick={() => void startTopup(cents)}
             title={`Add ${label} of prepaid credits`}
           >
             {topupBusy === cents ? "…" : label}
-          </button>
+          </Button>
         ))}
       </div>
       <div style={{ marginTop: 4, fontSize: "0.78em", color: "var(--color-text-secondary)" }}>

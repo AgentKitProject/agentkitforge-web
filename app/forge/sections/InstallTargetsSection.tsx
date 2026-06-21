@@ -5,6 +5,7 @@
 // and a dedicated download action. Reuses the existing export routes.
 
 import { useState } from "react";
+import { Button, Field, Select } from "@agentkitforge/ui";
 import { PlugIcon } from "../icons";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
@@ -60,15 +61,14 @@ export function InstallTargetsSection({
           Export your kit directly into an agent runtime. Choose a kit, then pick a target — each export
           downloads a ready-to-install archive.
         </p>
-        <div className="field">
-          <label>Kit to export</label>
-          <select value={kitId} onChange={(e) => setKitId(e.target.value)}>
+        <Field label="Kit to export">
+          <Select value={kitId} onChange={(e) => setKitId(e.target.value)}>
             <option value="">Select a kit…</option>
             {kits.map((k) => (
               <option key={k.kitId} value={k.kitId}>{k.name ?? k.kitId}</option>
             ))}
-          </select>
-        </div>
+          </Select>
+        </Field>
       </div>
 
       <div className="screen-grid compact">
@@ -78,9 +78,9 @@ export function InstallTargetsSection({
             <h2>{t.label}</h2>
             <p>{t.description}</p>
             <p className="form-copy" style={{ fontSize: "0.82em", fontStyle: "italic", marginBottom: 12 }}>{t.hint}</p>
-            <button
-              className="primary-button"
+            <Button
               disabled={!kitId || busy !== null}
+              loading={busy === t.id}
               onClick={
                 t.id === "claude-code"
                   ? act(t.id, () => forge.exportAgentKitToClaudeCode({ kitPath: kitId, destinationDir: "", force: true }))
@@ -88,7 +88,7 @@ export function InstallTargetsSection({
               }
             >
               {busy === t.id ? "Exporting…" : t.actionLabel}
-            </button>
+            </Button>
           </div>
         ))}
       </div>

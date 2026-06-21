@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Button, Field, Input, Select, Textarea } from "@agentkitforge/ui";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 
@@ -145,15 +146,14 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
         <div className="form-panel">
           <h2>Run a prepared prompt</h2>
           <p className="form-copy">Pick a kit and one of its prepared prompts, fill in the inputs, and render the final prompt text.</p>
-          <div className="field">
-            <label>Kit</label>
-            <select value={kitId} onChange={(e) => { setKitId(e.target.value); setPromptId(""); setRendered(""); }}>
+          <Field label="Kit">
+            <Select value={kitId} onChange={(e) => { setKitId(e.target.value); setPromptId(""); setRendered(""); }}>
               <option value="">Select a kit…</option>
               {kits.map((k) => (
                 <option key={k.kitId} value={k.kitId}>{k.name ?? k.kitId}</option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
           {hint && (
             <div className="results-panel" style={{ marginBottom: 12, padding: "10px 14px" }}>
@@ -162,15 +162,14 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
             </div>
           )}
 
-          <div className="field">
-            <label>Prepared prompt</label>
-            <select value={promptId} onChange={(e) => setPromptId(e.target.value)} disabled={!prompts.length}>
+          <Field label="Prepared prompt">
+            <Select value={promptId} onChange={(e) => setPromptId(e.target.value)} disabled={!prompts.length}>
               <option value="">{prompts.length ? "Select a prompt…" : "No prepared prompts"}</option>
               {prompts.map((p) => (
                 <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
           {selectedPrompt?.description && (
             <p className="form-copy" style={{ fontStyle: "italic" }}>{selectedPrompt.description}</p>
@@ -184,44 +183,41 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
               onChange={(id, val) => setInputValues((v) => ({ ...v, [id]: val }))}
             />
           ) : promptId ? (
-            <div className="field">
-              <label>Input values (JSON)</label>
-              <textarea
+            <Field label="Input values (JSON)">
+              <Textarea
                 value={typeof inputValues === "object" ? JSON.stringify(inputValues, null, 2) : "{}"}
                 onChange={(e) => {
                   try { setInputValues(JSON.parse(e.target.value) as Record<string, unknown>); } catch { /* invalid JSON while typing */ }
                 }}
                 style={{ minHeight: 120, fontFamily: "var(--mono, monospace)" }}
               />
-            </div>
+            </Field>
           ) : null}
 
           {/* Advanced run parameters */}
           <div style={{ marginTop: 12 }}>
-            <button
+            <Button
               type="button"
-              className="secondary-button"
+              variant="secondary"
               style={{ fontSize: "0.82em" }}
               onClick={() => setShowAdvanced((v) => !v)}
             >
               {showAdvanced ? "▾" : "▸"} Run parameters
-            </button>
+            </Button>
             {showAdvanced && (
               <div className="provider-card" style={{ marginTop: 8 }}>
-                <div className="field">
-                  <label style={{ fontSize: "0.88em" }}>Context mode</label>
-                  <select
+                <Field label="Context mode">
+                  <Select
                     value={runParams.contextMode}
                     onChange={(e) => setParam("contextMode", e.target.value as RunParams["contextMode"])}
                     style={{ fontSize: "0.88em" }}
                   >
                     <option value="all">All skills (full context)</option>
                     <option value="triggered">Triggered (best-matching skills first)</option>
-                  </select>
-                </div>
-                <div className="field">
-                  <label style={{ fontSize: "0.88em" }}>Validation profile</label>
-                  <select
+                  </Select>
+                </Field>
+                <Field label="Validation profile">
+                  <Select
                     value={runParams.validationProfile}
                     onChange={(e) => setParam("validationProfile", e.target.value as RunParams["validationProfile"])}
                     style={{ fontSize: "0.88em" }}
@@ -230,8 +226,8 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
                     <option value="publishable">publishable</option>
                     <option value="trusted">trusted</option>
                     <option value="verified">verified</option>
-                  </select>
-                </div>
+                  </Select>
+                </Field>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 4 }}>
                   {([
                     ["validateBeforeRender", "Validate kit before rendering"],
@@ -254,22 +250,22 @@ export function UseSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
             )}
           </div>
 
-          <button
-            className="primary-button"
+          <Button
             style={{ marginTop: 12 }}
             disabled={!kitId || !promptId || busy}
+            loading={busy}
             onClick={() => void render()}
           >
             {busy ? "Rendering…" : "Render prompt"}
-          </button>
+          </Button>
         </div>
         <div className="results-panel">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
             <h2 style={{ margin: 0 }}>Rendered prompt</h2>
             {rendered && (
               <div className="button-row" style={{ margin: 0, gap: 6 }}>
-                <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void copyToClipboard()}>Copy</button>
-                <button className="secondary-button" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={downloadText}>Download</button>
+                <Button variant="secondary" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={() => void copyToClipboard()}>Copy</Button>
+                <Button variant="secondary" style={{ fontSize: "0.8em", padding: "3px 10px" }} onClick={downloadText}>Download</Button>
               </div>
             )}
           </div>
@@ -319,22 +315,22 @@ function PreparedPromptInputField({
 
   if (type === "long-text") {
     return (
-      <div className="field">
+      <Field>
         {label}
-        <textarea value={strVal} onChange={(e) => onChange(e.target.value)} placeholder={input.placeholder} style={{ minHeight: 100 }} />
-      </div>
+        <Textarea value={strVal} onChange={(e) => onChange(e.target.value)} placeholder={input.placeholder} style={{ minHeight: 100 }} />
+      </Field>
     );
   }
 
   if (type === "choice" && input.choices?.length) {
     return (
-      <div className="field">
+      <Field>
         {label}
-        <select value={strVal} onChange={(e) => onChange(e.target.value)}>
+        <Select value={strVal} onChange={(e) => onChange(e.target.value)}>
           {!input.required && <option value="">—</option>}
           {input.choices.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
+        </Select>
+      </Field>
     );
   }
 
@@ -345,7 +341,7 @@ function PreparedPromptInputField({
       onChange(next);
     };
     return (
-      <div className="field">
+      <Field>
         {label}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
           {input.choices.map((c) => (
@@ -354,7 +350,7 @@ function PreparedPromptInputField({
             </label>
           ))}
         </div>
-      </div>
+      </Field>
     );
   }
 
@@ -372,27 +368,27 @@ function PreparedPromptInputField({
 
   if (type === "number") {
     return (
-      <div className="field">
+      <Field>
         {label}
-        <input type="number" value={strVal} onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))} placeholder={input.placeholder} />
-      </div>
+        <Input type="number" value={strVal} onChange={(e) => onChange(e.target.value === "" ? "" : Number(e.target.value))} placeholder={input.placeholder} />
+      </Field>
     );
   }
 
   if (type === "date") {
     return (
-      <div className="field">
+      <Field>
         {label}
-        <input type="date" value={strVal} onChange={(e) => onChange(e.target.value)} />
-      </div>
+        <Input type="date" value={strVal} onChange={(e) => onChange(e.target.value)} />
+      </Field>
     );
   }
 
   // default: short-text
   return (
-    <div className="field">
+    <Field>
       {label}
-      <input value={strVal} onChange={(e) => onChange(e.target.value)} placeholder={input.placeholder} />
-    </div>
+      <Input value={strVal} onChange={(e) => onChange(e.target.value)} placeholder={input.placeholder} />
+    </Field>
   );
 }
