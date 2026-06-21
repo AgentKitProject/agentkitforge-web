@@ -97,6 +97,61 @@ web:
     #      - forge.example.ts.net
 
 # ---------------------------------------------------------------------------
+# AgentKitAuto — self-host autonomous runs (Phase D).
+#
+# When enabled, the web app dispatches each Auto run to a one-shot Kubernetes Job
+# running the Auto WORKER image (the self-host equivalent of the hosted Fargate
+# worker). This requires:
+#   - AUTO_DISPATCH=k8s on the web app (set automatically below),
+#   - RBAC so the web ServiceAccount can create/manage Jobs (rendered below),
+#   - the worker image + per-run env (Postgres/MinIO/resolve config) — most of
+#     which the dispatcher forwards from the web pod's OWN env, so you configure
+#     it once here,
+#   - a sweep CronJob (below) that ticks the per-minute schedule endpoint.
+#
+# BILLING POLICY (self-host):
+#   - "free" (default): every run is BYO (the operator's ANTHROPIC_API_KEY), no
+#     metering, no per-minute compute fee. The worker uses an inert credit ledger.
+#   - "managed": metered against the gateway credit ledger (Postgres) with the
+#     AUTO_MARKUP_BPS markup + per-minute compute fee. Only enable if you run a
+#     credit/billing flow.
+auto:
+  enabled: false
+  # The Auto worker image (built from agentkitauto-core/Dockerfile).
+  workerImage: "ghcr.io/agentkitproject/agentkitauto-worker:latest"
+  # Namespace the dispatcher creates Jobs in. Empty → the release namespace.
+  namespace: ""
+  # Self-host billing policy: "free" (default) | "managed".
+  billing: "free"
+  # ANTHROPIC_API_KEY for inference. In free mode this is the operator's BYO key
+  # used by every run. Usually supplied via the external secret (key
+  # ANTHROPIC_API_KEY); set here only to override.
+  anthropicApiKey: ""
+  # Shared service key the sweep + worker present to the web app's internal
+  # endpoints (AUTO_WORKER_SERVICE_KEY). Generate: openssl rand -hex 32. Usually
+  # supplied via the external secret (key AUTO_WORKER_SERVICE_KEY).
+  serviceKey: ""
+  # The in-cluster URL the worker + sweep reach the web app at. Empty → derived
+  # from the in-cluster web Service (http://<release>-web).
+  internalUrl: ""
+  # Per-run worker resources + lifecycle (forwarded to the Job spec via env).
+  worker:
+    cpuRequest: "250m"
+    cpuLimit: "1"
+    memoryRequest: "512Mi"
+    memoryLimit: "1Gi"
+    # Auto-delete finished Jobs after this many seconds.
+    ttlSecondsAfterFinished: 3600
+    # emptyDir size for the per-run /scratch workspace.
+    scratchSize: "1Gi"
+  # The per-minute schedule sweep (self-host equivalent of the EventBridge rule).
+  sweep:
+    enabled: true
+    schedule: "* * * * *"
+    # A tiny image with curl to POST the service key to the sweep endpoint.
+    image: "curlimages/curl:8.11.1"
+
+# ---------------------------------------------------------------------------
 # Bundled in-cluster Postgres (metadata + per-user settings).
 # DATABASE_URL auto-defaults to this Service. Disable + provide DATABASE_URL in
 # the secret to point at an external instance.
