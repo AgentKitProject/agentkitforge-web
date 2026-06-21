@@ -19,13 +19,14 @@
 // Failure mapping (deliberately terse, no probing): not_found / disabled /
 // bad_secret → 401 (a caller can't distinguish a missing webhook from a wrong
 // secret); approval_invalid / over_budget → 403.
+import { autoErrorCodeSchema, autoWebhookSecretHeader } from "@agentkitforge/contracts";
 import { fireWebhook, WebhookError } from "@/server/core/auto";
 
 export const dynamic = "force-dynamic";
 
 /** Extract the presented secret from the header or the `?token=` query param. */
 function presentedSecret(request: Request, url: URL): string | null {
-  const header = request.headers.get("x-auto-webhook-secret");
+  const header = request.headers.get(autoWebhookSecretHeader);
   if (header && header.length > 0) return header;
   const token = url.searchParams.get("token");
   if (token && token.length > 0) return token;
@@ -38,7 +39,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ web
   const secret = presentedSecret(request, url);
   if (!secret) {
     // No secret presented → 401 (the route is secret-only; never falls back).
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return Response.json({ error: autoErrorCodeSchema.enum.unauthorized }, { status: 401 });
   }
 
   // Best-effort parse of the inbound payload (folded into the run input by
@@ -59,10 +60,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ web
     if (error instanceof WebhookError) {
       // Auth-ish failures → 401 (no probing which webhooks exist / valid secret).
       if (error.reason === "not_found" || error.reason === "disabled" || error.reason === "bad_secret") {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
+        return Response.json({ error: autoErrorCodeSchema.enum.unauthorized }, { status: 401 });
       }
       // Approval / budget gate → 403.
-      return Response.json({ error: "approval_denied", message: error.message }, { status: 403 });
+      return Response.json({ error: autoErrorCodeSchema.enum.approval_denied, message: error.message }, { status: 403 });
     }
     throw error;
   }

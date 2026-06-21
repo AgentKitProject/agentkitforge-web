@@ -18,6 +18,7 @@
 // the browser UI; the bearer path (/api/forge/auto/*) is for desktop/CLI clients.
 import { useCallback, useEffect, useState } from "react";
 import { Badge, Button, Card, Field, Input, Pill, Select, Textarea, brandVars } from "@agentkitforge/ui";
+import { autoRoutes } from "@agentkitforge/contracts";
 import type { MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 import { AutoLogo } from "./AutoLogo";
@@ -176,7 +177,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const loadApprovals = useCallback(async () => {
     try {
-      const { approvals } = await jsonFetch<{ approvals: Approval[] }>("/api/auto/approvals");
+      const { approvals } = await jsonFetch<{ approvals: Approval[] }>(autoRoutes.approvals());
       setApprovals(approvals.filter((a) => a.revokedAt === null));
     } catch (e) {
       notify(errMsg(e), true);
@@ -185,7 +186,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const loadRuns = useCallback(async () => {
     try {
-      const { runs } = await jsonFetch<{ runs: Run[] }>("/api/auto/runs");
+      const { runs } = await jsonFetch<{ runs: Run[] }>(autoRoutes.runs());
       setRuns(runs);
     } catch (e) {
       notify(errMsg(e), true);
@@ -194,7 +195,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const loadSchedules = useCallback(async () => {
     try {
-      const { schedules } = await jsonFetch<{ schedules: Schedule[] }>("/api/auto/schedules");
+      const { schedules } = await jsonFetch<{ schedules: Schedule[] }>(autoRoutes.schedules());
       setSchedules(schedules);
     } catch (e) {
       notify(errMsg(e), true);
@@ -203,7 +204,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const loadWebhooks = useCallback(async () => {
     try {
-      const { webhooks } = await jsonFetch<{ webhooks: Webhook[] }>("/api/auto/webhooks");
+      const { webhooks } = await jsonFetch<{ webhooks: Webhook[] }>(autoRoutes.webhooks());
       setWebhooks(webhooks);
     } catch (e) {
       notify(errMsg(e), true);
@@ -223,7 +224,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     let cancelled = false;
     const tick = async () => {
       try {
-        const run = await jsonFetch<Run>(`/api/auto/runs/${openRunId}`);
+        const run = await jsonFetch<Run>(autoRoutes.run(openRunId));
         if (!cancelled) setOpenRun(run);
       } catch {
         /* transient */
@@ -268,7 +269,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setApprBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: apprKitId };
-      await jsonFetch<Approval>("/api/auto/approvals", {
+      await jsonFetch<Approval>(autoRoutes.approvals(), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kitRef, toolAllowlist, maxBudgetCents: cents, networkPolicy })
@@ -284,7 +285,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const revoke = async (id: string) => {
     try {
-      await jsonFetch(`/api/auto/approvals/${id}/revoke`, { method: "POST" });
+      await jsonFetch(autoRoutes.revokeApproval(id), { method: "POST" });
       notify("Approval revoked.");
       await loadApprovals();
     } catch (e) {
@@ -309,7 +310,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         const { slots, inputFiles: manifest } = await jsonFetch<{
           slots: { path: string; s3Key: string; uploadUrl: string }[];
           inputFiles: { path: string; s3Key?: string }[];
-        }>("/api/auto/runs/inputs/upload-url", {
+        }>(autoRoutes.runInputsUploadUrl(), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
@@ -331,7 +332,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
         inputFiles = manifest;
       }
 
-      const { id } = await jsonFetch<{ id: string }>("/api/auto/runs", {
+      const { id } = await jsonFetch<{ id: string }>(autoRoutes.runs(), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -355,7 +356,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const cancelRun = async (id: string) => {
     try {
-      await jsonFetch(`/api/auto/runs/${id}/cancel`, { method: "POST" });
+      await jsonFetch(autoRoutes.cancelRun(id), { method: "POST" });
       notify("Cancellation requested.");
       await loadRuns();
     } catch (e) {
@@ -378,7 +379,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setSchedBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: schedKitId };
-      await jsonFetch<Schedule>("/api/auto/schedules", {
+      await jsonFetch<Schedule>(autoRoutes.schedules(), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -402,7 +403,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const toggleSchedule = async (s: Schedule) => {
     try {
-      await jsonFetch<Schedule>(`/api/auto/schedules/${s.id}`, {
+      await jsonFetch<Schedule>(autoRoutes.schedule(s.id), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled: !s.enabled })
@@ -415,7 +416,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const removeSchedule = async (id: string) => {
     try {
-      await jsonFetch(`/api/auto/schedules/${id}`, { method: "DELETE" });
+      await jsonFetch(autoRoutes.schedule(id), { method: "DELETE" });
       notify("Schedule deleted.");
       await loadSchedules();
     } catch (e) {
@@ -432,7 +433,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
     setWhBusy(true);
     try {
       const kitRef: KitRef = { source: "local", localKitId: whKitId };
-      const created = await jsonFetch<CreatedWebhook>("/api/auto/webhooks", {
+      const created = await jsonFetch<CreatedWebhook>(autoRoutes.webhooks(), {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kitRef, budgetCents: cents, approvalId: approval.id })
@@ -450,7 +451,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const toggleWebhook = async (w: Webhook) => {
     try {
-      await jsonFetch<Webhook>(`/api/auto/webhooks/${w.id}`, {
+      await jsonFetch<Webhook>(autoRoutes.webhook(w.id), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ enabled: !w.enabled })
@@ -463,7 +464,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
 
   const removeWebhook = async (id: string) => {
     try {
-      await jsonFetch(`/api/auto/webhooks/${id}`, { method: "DELETE" });
+      await jsonFetch(autoRoutes.webhook(id), { method: "DELETE" });
       notify("Webhook deleted.");
       await loadWebhooks();
     } catch (e) {

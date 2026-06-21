@@ -22,6 +22,7 @@
 //
 // SECURITY: never logs the service key. Logs only the non-sensitive sweep summary
 // counts (processed/dispatched/skipped/errors).
+import { autoErrorCodeSchema, autoInternalServiceKeyHeader } from "@agentkitforge/contracts";
 import { timingSafeEqual } from "node:crypto";
 import { runScheduleSweep } from "@/server/core/auto";
 
@@ -39,7 +40,7 @@ function serviceKeyMatches(expected: string, presented: string): boolean {
 
 /** Extract the presented service key from x-service-key OR Authorization: Bearer. */
 function presentedKey(request: Request): string | null {
-  const headerKey = request.headers.get("x-service-key");
+  const headerKey = request.headers.get(autoInternalServiceKeyHeader);
   if (headerKey && headerKey.length > 0) return headerKey;
   const auth = request.headers.get("authorization");
   if (auth) {
@@ -54,11 +55,11 @@ export async function POST(request: Request) {
   const expected = process.env.AUTO_WORKER_SERVICE_KEY;
   if (!expected || expected.length === 0) {
     // Disabled until a key is configured — never allow unauthenticated access.
-    return Response.json({ error: "internal_auth_unconfigured" }, { status: 503 });
+    return Response.json({ error: autoErrorCodeSchema.enum.internal_auth_unconfigured }, { status: 503 });
   }
   const presented = presentedKey(request);
   if (!presented || !serviceKeyMatches(expected, presented)) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return Response.json({ error: autoErrorCodeSchema.enum.unauthorized }, { status: 401 });
   }
 
   // ---- Run one sweep -------------------------------------------------------

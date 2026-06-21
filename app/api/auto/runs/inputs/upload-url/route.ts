@@ -10,6 +10,7 @@
 // run-create body (POST /api/auto/runs). The worker hydrates them into the run
 // workspace inputs/ dir via auto-core's S3InputStore. Filenames are path-safe
 // (auto-core's confineInputPath rejects absolute paths + traversal).
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireUserForApi, UnauthorizedError } from "@/lib/auth";
 import {
   AutoValidationError,
@@ -52,10 +53,10 @@ export async function POST(request: Request) {
     return Response.json(result, { status: 200 });
   } catch (error) {
     if (error instanceof InputStorageUnconfiguredError) {
-      return Response.json({ error: "inputs_unconfigured", message: error.message }, { status: 503 });
+      return Response.json({ error: autoErrorCodeSchema.enum.inputs_unconfigured, message: error.message }, { status: 503 });
     }
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     throw error;
   }

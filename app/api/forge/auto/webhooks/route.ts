@@ -7,6 +7,7 @@
 //   POST → create a webhook (same body as the cookie sibling); returns the
 //          plaintext secret + ingest URL ONCE.
 //   GET  → list the user's webhooks (secretHash never exposed).
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
 import {
   ApprovalDeniedError,
@@ -52,10 +53,10 @@ export async function POST(request: Request) {
     return Response.json(createWebhookResponse(created), { status: 201 });
   } catch (error) {
     if (error instanceof ApprovalDeniedError) {
-      return Response.json({ error: "approval_denied", message: error.message }, { status: 403 });
+      return Response.json({ error: autoErrorCodeSchema.enum.approval_denied, message: error.message }, { status: 403 });
     }
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     throw error;
   }

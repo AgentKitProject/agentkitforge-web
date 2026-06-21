@@ -6,6 +6,7 @@
 //
 //   POST → create a standing approval { kitRef, toolAllowlist, maxBudgetCents }.
 //   GET  → list the user's approvals.
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
 import {
   AutoValidationError,
@@ -46,7 +47,7 @@ export async function POST(request: Request) {
     return Response.json(approval, { status: 201 });
   } catch (error) {
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     throw error;
   }

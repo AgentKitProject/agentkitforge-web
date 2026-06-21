@@ -16,6 +16,7 @@
 // SECURITY: the systemPrompt/kitContext and the byoProvider.apiKey are returned
 // ONLY to the service-key caller. They are NEVER logged here and NEVER returned to
 // the browser. We log only the runId, inferenceMode, and tool count.
+import { autoErrorCodeSchema, autoInternalServiceKeyHeader } from "@agentkitforge/contracts";
 import { timingSafeEqual } from "node:crypto";
 import { resolveWorkerContext } from "@/server/core/auto";
 
@@ -33,7 +34,7 @@ function serviceKeyMatches(expected: string, presented: string): boolean {
 /** Extract the presented service key from x-service-key OR Authorization: Bearer.
  *  The worker sends both; either is accepted. */
 function presentedKey(request: Request): string | null {
-  const headerKey = request.headers.get("x-service-key");
+  const headerKey = request.headers.get(autoInternalServiceKeyHeader);
   if (headerKey && headerKey.length > 0) return headerKey;
   const auth = request.headers.get("authorization");
   if (auth) {
@@ -48,18 +49,18 @@ export async function POST(request: Request) {
   const expected = process.env.AUTO_WORKER_SERVICE_KEY;
   if (!expected || expected.length === 0) {
     // Disabled until a key is configured — never allow unauthenticated access.
-    return Response.json({ error: "internal_auth_unconfigured" }, { status: 503 });
+    return Response.json({ error: autoErrorCodeSchema.enum.internal_auth_unconfigured }, { status: 503 });
   }
   const presented = presentedKey(request);
   if (!presented || !serviceKeyMatches(expected, presented)) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return Response.json({ error: autoErrorCodeSchema.enum.unauthorized }, { status: 401 });
   }
 
   // ---- Body validation -----------------------------------------------------
   const body = (await request.json().catch(() => ({}))) as { runId?: unknown };
   const runId = typeof body.runId === "string" ? body.runId.trim() : "";
   if (runId.length === 0) {
-    return Response.json({ error: "invalid_request", message: "runId is required." }, { status: 400 });
+    return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: "runId is required." }, { status: 400 });
   }
 
   // ---- Resolve server-side -------------------------------------------------
@@ -70,7 +71,7 @@ export async function POST(request: Request) {
     ctx = await resolveWorkerContext(runId);
   } catch {
     // Missing run / no approval → 404 (do not leak details).
-    return Response.json({ error: "not_found" }, { status: 404 });
+    return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   }
 
   // Log ONLY non-sensitive facts (never the prompt or BYO key).
