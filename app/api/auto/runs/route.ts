@@ -15,6 +15,7 @@ import {
   AutoValidationError,
   InsufficientComputeBalanceError,
   listRuns,
+  parseInputFiles,
   parseKitRef,
   startRun
 } from "@/server/core/auto";
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
     prompt?: unknown;
     budgetCents?: unknown;
     model?: unknown;
+    inputFiles?: unknown;
   };
 
   try {
@@ -55,6 +57,8 @@ export async function POST(request: Request) {
       : undefined;
     const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
     const model = typeof body.model === "string" ? body.model : undefined;
+    // Phase C: out-of-band staged input files (presigned-uploaded then referenced).
+    const inputFiles = parseInputFiles(body.inputFiles);
 
     const run = await startRun({
       userId,
@@ -63,6 +67,7 @@ export async function POST(request: Request) {
       budgetCents,
       ...(model ? { model } : {}),
       ...(files ? { files } : {}),
+      ...(inputFiles.length > 0 ? { inputFiles } : {}),
       // Cookie path: kit-context resolution uses the cookie forwarding store for
       // protected/Market kits (no forwarded bearer here).
       kitContext: {}

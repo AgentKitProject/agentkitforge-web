@@ -14,6 +14,7 @@ import {
   AutoValidationError,
   InsufficientComputeBalanceError,
   listRuns,
+  parseInputFiles,
   parseKitRef,
   startRun
 } from "@/server/core/auto";
@@ -38,6 +39,7 @@ export async function POST(request: Request) {
     prompt?: unknown;
     budgetCents?: unknown;
     model?: unknown;
+    inputFiles?: unknown;
   };
 
   try {
@@ -57,6 +59,7 @@ export async function POST(request: Request) {
       : undefined;
     const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
     const model = typeof body.model === "string" ? body.model : undefined;
+    const inputFiles = parseInputFiles(body.inputFiles);
 
     const run = await startRun({
       userId,
@@ -65,6 +68,7 @@ export async function POST(request: Request) {
       budgetCents,
       ...(model ? { model } : {}),
       ...(files ? { files } : {}),
+      ...(inputFiles.length > 0 ? { inputFiles } : {}),
       // Forge path: forward the already-verified bearer so protected/Market kit
       // context is fetched + entitlement-checked server-side at run time.
       kitContext: bearerToken ? { bearerToken } : {}

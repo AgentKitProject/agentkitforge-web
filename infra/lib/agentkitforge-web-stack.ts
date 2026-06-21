@@ -166,6 +166,30 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       projectionType: dynamodb.ProjectionType.ALL
     });
 
+    // AutoWebhooks (Phase C) — standing inbound webhook triggers. Key schema MUST
+    // mirror auto-core's aws adapter (DynamoAutoWebhookRepository):
+    //   - PK `id`.
+    //   - GSI `userId-index` (PK gsiUserId) — listWebhooksByUser.
+    // Stores ONLY the secret HASH (never the plaintext); fireCount is incremented
+    // atomically via an ADD on recordFire.
+    const autoWebhooksTable = new dynamodb.Table(this, "AutoWebhooksTable", {
+      partitionKey: { name: "id", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
+      removalPolicy: cdk.RemovalPolicy.RETAIN
+    });
+    autoWebhooksTable.addGlobalSecondaryIndex({
+      indexName: "userId-index",
+      partitionKey: { name: "gsiUserId", type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+
+    // Phase C: staged run-input files live under an `auto-inputs/` prefix in the
+    // existing kit-trees bucket (auto-core's S3InputStore builds keys
+    // `auto-inputs/{runId}/...`). The web app (SSR user) presigns PUT on this
+    // prefix; the worker (task role) GETs them during hydration.
+    const autoInputsPrefix = "auto-inputs/";
+
     // ---- 2. ECR repository ---------------------------------------------------
     const workerRepo = new ecr.Repository(this, "AutoWorkerRepo", {
       repositoryName: "agentkit-auto-worker",
@@ -244,6 +268,10 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     // the web app under the SSR user; the task role gets RW for parity + any future
     // worker-side schedule reads. Index ARNs are auto-included.
     autoSchedulesTable.grantReadWriteData(taskRole);
+    // Webhooks (Phase C): the worker doesn't fire webhooks (the SSR web app does,
+    // via the public ingest route), but grant RW for parity + any future
+    // worker-side reads. Index ARNs are auto-included.
+    autoWebhooksTable.grantReadWriteData(taskRole);
     // Gateway credit ledger — the worker debits during a run.
     gatewayCreditAccounts.grantReadWriteData(taskRole);
     gatewayCreditTxns.grantReadWriteData(taskRole);
@@ -272,6 +300,10 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       AUTO_RUNS_TABLE: autoRunsTable.tableName,
       AUTO_APPROVALS_TABLE: autoApprovalsTable.tableName,
       AUTO_SCHEDULES_TABLE: autoSchedulesTable.tableName,
+      AUTO_WEBHOOKS_TABLE: autoWebhooksTable.tableName,
+      // Phase C: staged run-input bucket + prefix (worker GETs during hydration).
+      AUTO_INPUTS_BUCKET: kitTrees.bucketName,
+      AUTO_INPUTS_PREFIX: autoInputsPrefix,
       GATEWAY_CREDIT_ACCOUNTS_TABLE: gatewayCreditAccounts.tableName,
       GATEWAY_CREDIT_TXNS_TABLE: gatewayCreditTxns.tableName,
       GATEWAY_CREDIT_HOLDS_TABLE: gatewayCreditHolds.tableName,
@@ -344,8 +376,20 @@ export class AgentKitForgeWebStack extends cdk.Stack {
             // Phase B: the SSR app does schedule CRUD + the per-minute sweep
             // (listDueSchedules over dueIndex), so it needs RW on the table + GSIs.
             autoSchedulesTable.tableArn,
-            `${autoSchedulesTable.tableArn}/index/*`
+            `${autoSchedulesTable.tableArn}/index/*`,
+            // Phase C: webhook CRUD + the public ingest fire (getWebhook /
+            // recordFire / setEnabled) all run in the SSR app — RW on table + GSI.
+            autoWebhooksTable.tableArn,
+            `${autoWebhooksTable.tableArn}/index/*`
           ]
+        }),
+        // Phase C: the SSR app issues presigned PUT URLs for run-input uploads
+        // under the auto-inputs/ prefix. Presigning requires the user's own
+        // s3:PutObject permission on the target key; GET is included so the SSR
+        // app can also read back staged inputs if needed. Scoped to the prefix.
+        new iam.PolicyStatement({
+          actions: ["s3:PutObject", "s3:GetObject"],
+          resources: [`${kitTrees.bucketArn}/${autoInputsPrefix}*`]
         })
       ]
     });
@@ -423,6 +467,18 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     new cdk.CfnOutput(this, "AutoSchedulesTableOut", {
       value: autoSchedulesTable.tableName,
       description: "AUTO_SCHEDULES_TABLE"
+    });
+    new cdk.CfnOutput(this, "AutoWebhooksTableOut", {
+      value: autoWebhooksTable.tableName,
+      description: "AUTO_WEBHOOKS_TABLE"
+    });
+    new cdk.CfnOutput(this, "AutoInputsBucketOut", {
+      value: kitTrees.bucketName,
+      description: "AUTO_INPUTS_BUCKET"
+    });
+    new cdk.CfnOutput(this, "AutoInputsPrefixOut", {
+      value: autoInputsPrefix,
+      description: "AUTO_INPUTS_PREFIX"
     });
     new cdk.CfnOutput(this, "AutoScheduleSweepRuleOut", {
       value: sweepRule.ruleName,
