@@ -440,7 +440,26 @@ export class AgentKitForgeWebStack extends cdk.Stack {
     // capabilities at all. Dropping ALL is the strongest, cleanest posture and
     // is honored by Fargate's platform.
     const linuxParameters = new ecs.LinuxParameters(this, "AutoWorkerLinuxParams");
-    linuxParameters.dropCapabilities(ecs.Capability.ALL);
+    // Fargate does NOT support ADDING capabilities (only dropping) — so we can't
+    // `drop ALL` then add back. Instead, DROP a curated list of the dangerous
+    // default Docker caps while KEEPING the three the root entrypoint needs:
+    // CHOWN (to chown the root-owned /scratch ephemeral volume so the non-root
+    // `node` user can write its per-run workspaces) and SETUID/SETGID (for gosu
+    // to drop root → node). This drops 11 of the 14 default caps; the final node
+    // process is non-root and post-setuid holds no effective caps.
+    linuxParameters.dropCapabilities(
+      ecs.Capability.AUDIT_WRITE,
+      ecs.Capability.DAC_OVERRIDE,
+      ecs.Capability.FOWNER,
+      ecs.Capability.FSETID,
+      ecs.Capability.KILL,
+      ecs.Capability.MKNOD,
+      ecs.Capability.NET_BIND_SERVICE,
+      ecs.Capability.NET_RAW,
+      ecs.Capability.SETFCAP,
+      ecs.Capability.SETPCAP,
+      ecs.Capability.SYS_CHROOT
+    );
 
     // Container name MUST stay exactly "auto-worker" — the dispatcher's
     // RunTask container override targets this name.
