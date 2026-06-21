@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Badge, Button } from "@agentkitforge/ui";
 import { PackageIcon, StarIcon } from "../icons";
 import type { Favorite, Forge, MyKitEntry, Notify, UsageInfo } from "./shared";
 import { errMsg, fmtBytes } from "./shared";
@@ -90,8 +91,8 @@ export function MyKits({
           )}
         </div>
         <div className="button-row">
-          <button className="secondary-button" onClick={onImport}>Import a kit</button>
-          <button className="primary-button" onClick={onBuild}>Build a kit</button>
+          <Button variant="secondary" onClick={onImport}>Import a kit</Button>
+          <Button onClick={onBuild}>Build a kit</Button>
         </div>
       </div>
 
@@ -111,7 +112,7 @@ export function MyKits({
                   <h2>{k.name ?? k.kitId}</h2>
                   <p>Kit in your library. Open to edit files, validate, package, or export.</p>
                 </div>
-                <span className="source-badge">{k.source ?? "kit"}</span>
+                <Badge tone="neutral">{k.source ?? "kit"}</Badge>
               </div>
               <dl className="kit-meta-grid">
                 <div>
@@ -120,9 +121,9 @@ export function MyKits({
                 </div>
               </dl>
               <div className="button-row">
-                <button className="primary-button" onClick={() => onOpen(k.kitId)}>Open</button>
-                <button
-                  className="secondary-button"
+                <Button onClick={() => onOpen(k.kitId)}>Open</Button>
+                <Button
+                  variant="secondary"
                   onClick={() =>
                     forge.packageAgentKit({ rootPath: k.kitId, outputFolder: "" }).then(
                       () => notify("Package downloaded."),
@@ -131,9 +132,9 @@ export function MyKits({
                   }
                 >
                   Package
-                </button>
-                <button className="secondary-button" onClick={() => onSubmit(k.kitId)}>Submit to Market</button>
-                <button className="danger-button" onClick={() => void remove(k.kitId)}>Remove</button>
+                </Button>
+                <Button variant="secondary" onClick={() => onSubmit(k.kitId)}>Submit to Market</Button>
+                <Button variant="danger" onClick={() => void remove(k.kitId)}>Remove</Button>
               </div>
             </article>
           ))}
@@ -153,11 +154,11 @@ export function MyKits({
                   <p>{f.publisher ?? "Market"} · {f.marketSlug}</p>
                   {updates[f.marketSlug] && <p style={{ color: "var(--color-warning)" }}>↑ {updates[f.marketSlug]}</p>}
                 </div>
-                <span className="source-badge"><StarIcon size={13} filled /> favorite</span>
+                <Badge tone="neutral"><StarIcon size={13} filled /> favorite</Badge>
               </div>
               <div className="button-row">
-                <button
-                  className="secondary-button"
+                <Button
+                  variant="secondary"
                   onClick={async () => {
                     try {
                       const res = await forge.fetchLicensedMarketKit({
@@ -172,8 +173,8 @@ export function MyKits({
                   }}
                 >
                   Preview (online)
-                </button>
-                <button className="danger-button" onClick={() => void unfavorite(f.marketSlug)}>Unfavorite</button>
+                </Button>
+                <Button variant="danger" onClick={() => void unfavorite(f.marketSlug)}>Unfavorite</Button>
               </div>
             </article>
           ))}
@@ -184,7 +185,7 @@ export function MyKits({
         <div className="results-panel" style={{ marginTop: 8 }}>
           <div className="screen-toolbar">
             <strong>In-memory licensed preview ({preview.files.length} files)</strong>
-            <button className="secondary-button" onClick={() => setPreview(null)}>Close</button>
+            <Button variant="secondary" onClick={() => setPreview(null)}>Close</Button>
           </div>
           <p className="form-copy">Online-only: never persisted to your library.</p>
           <ul className="preview-list">

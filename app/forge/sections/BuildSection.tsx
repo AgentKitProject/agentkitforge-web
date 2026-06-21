@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { Badge, Button, Field, Input, Select, Textarea } from "@agentkitforge/ui";
 import type { Forge, MyKitEntry, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
 import { HttpError } from "@/forge-client";
@@ -79,13 +80,13 @@ function ManagedModelSelector({
           (billed to prepaid credits)
         </span>
       </label>
-      <select value={model} onChange={(e) => setModel(e.target.value)}>
+      <Select value={model} onChange={(e) => setModel(e.target.value)}>
         {models.map((m) => (
           <option key={m.id} value={m.id}>
             {m.label} — {TIER_HINT[m.tier]}
           </option>
         ))}
-      </select>
+      </Select>
     </div>
   );
 }
@@ -215,27 +216,29 @@ function ExampleDocsPanel({
         <div style={{ marginBottom: 8 }}>
           {summaries.map((s) => (
             <div key={s.id} className="provider-card" style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", marginBottom: 4 }}>
-              <span className="source-badge">{s.kind}</span>
+              <Badge tone="neutral">{s.kind}</Badge>
               <span style={{ flex: 1, fontSize: "0.9em" }}>{s.filename}</span>
-              <button
-                className="danger-button"
+              <Button
+                variant="danger"
+                size="sm"
                 style={{ fontSize: "0.78em", padding: "2px 8px" }}
                 onClick={() => onRemove(s.id)}
               >
                 Remove
-              </button>
+              </Button>
             </div>
           ))}
         </div>
       )}
       <div className="button-row">
-        <button
-          className="secondary-button"
+        <Button
+          variant="secondary"
           disabled={uploading}
+          loading={uploading}
           onClick={() => fileRef.current?.click()}
         >
           {uploading ? "Uploading…" : "+ Attach document"}
-        </button>
+        </Button>
         <input
           ref={fileRef}
           type="file"
@@ -299,10 +302,9 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
         <h2>Generate with AI</h2>
         <p className="form-copy">Uses your default AI provider if configured under Settings; otherwise managed prepaid credits. Generate a draft, optionally revise, then render into a kit.</p>
         <CreditsPanel notify={notify} showDevGrant />
-        <div className="field">
-          <label>Describe the kit you want</label>
-          <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies." />
-        </div>
+        <Field label="Describe the kit you want">
+          <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies." />
+        </Field>
 
         <ExampleDocsPanel
           summaries={exDocs}
@@ -317,9 +319,9 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
           setModel={managed.setModel}
         />
 
-        <button className="primary-button" style={{ marginTop: 12 }} disabled={!prompt.trim() || busy} onClick={() => void generate()}>
+        <Button style={{ marginTop: 12 }} disabled={!prompt.trim() || busy} loading={busy} onClick={() => void generate()}>
           {busy ? "Working…" : "Generate draft"}
-        </button>
+        </Button>
         {credits && (
           <InsufficientCreditsBanner
             message={credits.message}
@@ -331,16 +333,16 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
         )}
         {draftJson != null && (
           <>
-            <div className="field" style={{ marginTop: 12 }}>
-              <label>Revision request (optional)</label>
-              <input value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for variance analysis" />
+            <div style={{ marginTop: 12 }}>
+              <Field label="Revision request (optional)">
+                <Input value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for variance analysis" />
+              </Field>
             </div>
             <div className="button-row">
-              <button className="secondary-button" disabled={!changeRequest.trim() || busy} onClick={() => void run(() => forge.reviseAgentKitDraftWithAi({ session, changeRequest, ...(managed.modelForRequest ? { model: managed.modelForRequest } : {}) } as never) as never, "Draft revised.").then(() => setChangeRequest(""))}>
+              <Button variant="secondary" disabled={!changeRequest.trim() || busy} onClick={() => void run(() => forge.reviseAgentKitDraftWithAi({ session, changeRequest, ...(managed.modelForRequest ? { model: managed.modelForRequest } : {}) } as never) as never, "Draft revised.").then(() => setChangeRequest(""))}>
                 Revise
-              </button>
-              <button
-                className="primary-button"
+              </Button>
+              <Button
                 disabled={busy}
                 onClick={async () => {
                   setBusy(true);
@@ -356,7 +358,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
                 }}
               >
                 Render into a kit
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -596,13 +598,13 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
           <>
             <h2>Basic information</h2>
             <p className="form-copy">Define the core identity of your Agent Kit.</p>
-            <div className="field"><label>Kit ID (slug) <span style={{ color: "var(--color-error)" }}>*</span></label><input value={form.kitId} onChange={(e) => setForm((f) => ({ ...f, kitId: e.target.value }))} placeholder="my-kit" /></div>
-            <div className="field"><label>Name <span style={{ color: "var(--color-error)" }}>*</span></label><input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="My Kit" /></div>
-            <div className="field"><label>Description <span style={{ color: "var(--color-error)" }}>*</span></label><textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></div>
-            <div className="field"><label>Domain (optional)</label><input value={form.domain} onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))} placeholder="e.g. finance, legal, healthcare" /></div>
-            <div className="field"><label>Target users (optional)</label><input value={form.targetUsers} onChange={(e) => setForm((f) => ({ ...f, targetUsers: e.target.value }))} placeholder="e.g. financial analysts, legal teams" /></div>
+            <Field label={<>Kit ID (slug) <span style={{ color: "var(--color-error)" }}>*</span></>}><Input value={form.kitId} onChange={(e) => setForm((f) => ({ ...f, kitId: e.target.value }))} placeholder="my-kit" /></Field>
+            <Field label={<>Name <span style={{ color: "var(--color-error)" }}>*</span></>}><Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="My Kit" /></Field>
+            <Field label={<>Description <span style={{ color: "var(--color-error)" }}>*</span></>}><Textarea value={form.description} onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} /></Field>
+            <Field label="Domain (optional)"><Input value={form.domain} onChange={(e) => setForm((f) => ({ ...f, domain: e.target.value }))} placeholder="e.g. finance, legal, healthcare" /></Field>
+            <Field label="Target users (optional)"><Input value={form.targetUsers} onChange={(e) => setForm((f) => ({ ...f, targetUsers: e.target.value }))} placeholder="e.g. financial analysts, legal teams" /></Field>
             <div className="button-row" style={{ marginTop: 12 }}>
-              <button className="primary-button" disabled={!form.kitId.trim() || !form.name.trim() || !form.description.trim()} onClick={() => setStep("skills")}>Next: Skills →</button>
+              <Button disabled={!form.kitId.trim() || !form.name.trim() || !form.description.trim()} onClick={() => setStep("skills")}>Next: Skills →</Button>
             </div>
           </>
         )}
@@ -618,18 +620,18 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
                 {s.triggers && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Triggers: {s.triggers}</p>}
                 {s.useWhen && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Use when: {s.useWhen}</p>}
                 {s.doNotUseWhen && <p className="form-copy" style={{ margin: "2px 0", fontSize: "0.85em" }}>Do not use when: {s.doNotUseWhen}</p>}
-                <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, skills: f.skills.filter((_, j) => j !== i) }))}>Remove</button>
+                <Button variant="danger" size="sm" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, skills: f.skills.filter((_, j) => j !== i) }))}>Remove</Button>
               </div>
             ))}
-            <div className="field"><label>Skill ID</label><input value={newSkill.id} onChange={(e) => setNewSkill((s) => ({ ...s, id: e.target.value }))} placeholder="analyze-report" /></div>
-            <div className="field"><label>Skill name</label><input value={newSkill.name} onChange={(e) => setNewSkill((s) => ({ ...s, name: e.target.value }))} placeholder="Analyze Report" /></div>
-            <div className="field"><label>Description</label><textarea value={newSkill.description} onChange={(e) => setNewSkill((s) => ({ ...s, description: e.target.value }))} style={{ minHeight: 64 }} /></div>
-            <div className="field"><label>Triggers (optional) — natural-language phrases that invoke this skill</label><input value={newSkill.triggers ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, triggers: e.target.value }))} placeholder="when user asks to analyze…" /></div>
-            <div className="field"><label>Use when (optional)</label><input value={newSkill.useWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, useWhen: e.target.value }))} placeholder="user provides a report document" /></div>
-            <div className="field"><label>Do not use when (optional)</label><input value={newSkill.doNotUseWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, doNotUseWhen: e.target.value }))} placeholder="no document is provided" /></div>
+            <Field label="Skill ID"><Input value={newSkill.id} onChange={(e) => setNewSkill((s) => ({ ...s, id: e.target.value }))} placeholder="analyze-report" /></Field>
+            <Field label="Skill name"><Input value={newSkill.name} onChange={(e) => setNewSkill((s) => ({ ...s, name: e.target.value }))} placeholder="Analyze Report" /></Field>
+            <Field label="Description"><Textarea value={newSkill.description} onChange={(e) => setNewSkill((s) => ({ ...s, description: e.target.value }))} style={{ minHeight: 64 }} /></Field>
+            <Field label="Triggers (optional) — natural-language phrases that invoke this skill"><Input value={newSkill.triggers ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, triggers: e.target.value }))} placeholder="when user asks to analyze…" /></Field>
+            <Field label="Use when (optional)"><Input value={newSkill.useWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, useWhen: e.target.value }))} placeholder="user provides a report document" /></Field>
+            <Field label="Do not use when (optional)"><Input value={newSkill.doNotUseWhen ?? ""} onChange={(e) => setNewSkill((s) => ({ ...s, doNotUseWhen: e.target.value }))} placeholder="no document is provided" /></Field>
             <div className="button-row">
-              <button className="secondary-button" disabled={!newSkill.id.trim() || !newSkill.name.trim()} onClick={addSkill}>+ Add skill</button>
-              <button className="primary-button" onClick={() => setStep("policies")}>Next: Policies →</button>
+              <Button variant="secondary" disabled={!newSkill.id.trim() || !newSkill.name.trim()} onClick={addSkill}>+ Add skill</Button>
+              <Button onClick={() => setStep("policies")}>Next: Policies →</Button>
             </div>
           </>
         )}
@@ -641,13 +643,13 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
             {form.policies.map((p, i) => (
               <div key={p.id} className="provider-card" style={{ marginBottom: 8 }}>
                 <p className="form-copy" style={{ margin: "2px 0" }}>{p.text}</p>
-                <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, policies: f.policies.filter((_, j) => j !== i) }))}>Remove</button>
+                <Button variant="danger" size="sm" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, policies: f.policies.filter((_, j) => j !== i) }))}>Remove</Button>
               </div>
             ))}
-            <div className="field"><label>Policy text</label><textarea value={newPolicy.text} onChange={(e) => setNewPolicy((p) => ({ ...p, text: e.target.value }))} style={{ minHeight: 64 }} placeholder="Always cite sources when summarizing documents." /></div>
+            <Field label="Policy text"><Textarea value={newPolicy.text} onChange={(e) => setNewPolicy((p) => ({ ...p, text: e.target.value }))} style={{ minHeight: 64 }} placeholder="Always cite sources when summarizing documents." /></Field>
             <div className="button-row">
-              <button className="secondary-button" disabled={!newPolicy.text.trim()} onClick={addPolicy}>+ Add policy</button>
-              <button className="primary-button" onClick={() => setStep("prompts")}>Next: Prompts →</button>
+              <Button variant="secondary" disabled={!newPolicy.text.trim()} onClick={addPolicy}>+ Add policy</Button>
+              <Button onClick={() => setStep("prompts")}>Next: Prompts →</Button>
             </div>
           </>
         )}
@@ -665,22 +667,21 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
                     Inputs: {p.inputs.map((inp) => `${inp.label}${inp.required ? "*" : ""} (${inp.type})`).join(", ")}
                   </p>
                 )}
-                <button className="danger-button" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, prompts: f.prompts.filter((_, j) => j !== i) }))}>Remove</button>
+                <Button variant="danger" size="sm" style={{ fontSize: "0.8em", padding: "2px 10px" }} onClick={() => setForm((f) => ({ ...f, prompts: f.prompts.filter((_, j) => j !== i) }))}>Remove</Button>
               </div>
             ))}
-            <div className="field"><label>Prompt ID</label><input value={newPrompt.id} onChange={(e) => setNewPrompt((p) => ({ ...p, id: e.target.value }))} placeholder="run-analysis" /></div>
-            <div className="field"><label>Prompt name</label><input value={newPrompt.name} onChange={(e) => setNewPrompt((p) => ({ ...p, name: e.target.value }))} placeholder="Run Analysis" /></div>
-            <div className="field"><label>Description</label><input value={newPrompt.description} onChange={(e) => setNewPrompt((p) => ({ ...p, description: e.target.value }))} /></div>
-            <div className="field"><label>Template (use {"{{variable}}"} for inputs)</label><textarea value={newPrompt.template} onChange={(e) => setNewPrompt((p) => ({ ...p, template: e.target.value }))} style={{ minHeight: 80, fontFamily: "var(--mono, monospace)" }} placeholder={"Analyze the following report:\n\n{{report}}\n\nFocus on: {{focus_area}}"} /></div>
-            <div className="field">
-              <label>Output mode (optional)</label>
-              <select value={newPrompt.outputMode ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, outputMode: (e.target.value || undefined) as GuidedPromptDef["outputMode"] }))}>
+            <Field label="Prompt ID"><Input value={newPrompt.id} onChange={(e) => setNewPrompt((p) => ({ ...p, id: e.target.value }))} placeholder="run-analysis" /></Field>
+            <Field label="Prompt name"><Input value={newPrompt.name} onChange={(e) => setNewPrompt((p) => ({ ...p, name: e.target.value }))} placeholder="Run Analysis" /></Field>
+            <Field label="Description"><Input value={newPrompt.description} onChange={(e) => setNewPrompt((p) => ({ ...p, description: e.target.value }))} /></Field>
+            <Field label={<>Template (use {"{{variable}}"} for inputs)</>}><Textarea value={newPrompt.template} onChange={(e) => setNewPrompt((p) => ({ ...p, template: e.target.value }))} style={{ minHeight: 80, fontFamily: "var(--mono, monospace)" }} placeholder={"Analyze the following report:\n\n{{report}}\n\nFocus on: {{focus_area}}"} /></Field>
+            <Field label="Output mode (optional)">
+              <Select value={newPrompt.outputMode ?? ""} onChange={(e) => setNewPrompt((p) => ({ ...p, outputMode: (e.target.value || undefined) as GuidedPromptDef["outputMode"] }))}>
                 <option value="">default</option>
                 <option value="text">text</option>
                 <option value="markdown">markdown</option>
                 <option value="document">document</option>
-              </select>
-            </div>
+              </Select>
+            </Field>
 
             {/* Typed inputs for this prompt (parity with desktop prepared prompts) */}
             <div className="provider-card" style={{ marginTop: 4, marginBottom: 8 }}>
@@ -692,21 +693,22 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
                 <div key={inp.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                   <span className="inline-code" style={{ fontSize: "0.82em" }}>{inp.id}</span>
                   <span style={{ flex: 1, fontSize: "0.85em" }}>{inp.label} <span style={{ color: "var(--color-text-secondary)" }}>({inp.type}{inp.required ? ", required" : ""}{inp.includeInPrompt ? "" : ", collected only"})</span></span>
-                  <button className="danger-button" style={{ fontSize: "0.76em", padding: "2px 8px" }} onClick={() => setNewPrompt((p) => ({ ...p, inputs: p.inputs.filter((_, k) => k !== j) }))}>Remove</button>
+                  <Button variant="danger" size="sm" style={{ fontSize: "0.76em", padding: "2px 8px" }} onClick={() => setNewPrompt((p) => ({ ...p, inputs: p.inputs.filter((_, k) => k !== j) }))}>Remove</Button>
                 </div>
               ))}
-              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Input label</label><input value={newPromptInput.label} onChange={(e) => setNewPromptInput((s) => ({ ...s, label: e.target.value }))} placeholder="Report text" /></div>
-              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Input ID (matches {"{{variable}}"}; auto from label if blank)</label><input value={newPromptInput.id} onChange={(e) => setNewPromptInput((s) => ({ ...s, id: e.target.value }))} placeholder="report" /></div>
-              <div className="field" style={{ marginBottom: 6 }}>
-                <label style={{ fontSize: "0.85em" }}>Type</label>
-                <select value={newPromptInput.type} onChange={(e) => setNewPromptInput((s) => ({ ...s, type: e.target.value as GuidedPromptInputType }))}>
-                  {PROMPT_INPUT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-                </select>
+              <div style={{ marginBottom: 6 }}><Field label={<span style={{ fontSize: "0.85em" }}>Input label</span>}><Input value={newPromptInput.label} onChange={(e) => setNewPromptInput((s) => ({ ...s, label: e.target.value }))} placeholder="Report text" /></Field></div>
+              <div style={{ marginBottom: 6 }}><Field label={<span style={{ fontSize: "0.85em" }}>Input ID (matches {"{{variable}}"}; auto from label if blank)</span>}><Input value={newPromptInput.id} onChange={(e) => setNewPromptInput((s) => ({ ...s, id: e.target.value }))} placeholder="report" /></Field></div>
+              <div style={{ marginBottom: 6 }}>
+                <Field label={<span style={{ fontSize: "0.85em" }}>Type</span>}>
+                  <Select value={newPromptInput.type} onChange={(e) => setNewPromptInput((s) => ({ ...s, type: e.target.value as GuidedPromptInputType }))}>
+                    {PROMPT_INPUT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </Select>
+                </Field>
               </div>
               {(newPromptInput.type === "choice" || newPromptInput.type === "multi-choice") && (
-                <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Choices (one per line)</label><textarea value={newPromptInput.choices ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, choices: e.target.value }))} style={{ minHeight: 56 }} placeholder={"low\nmedium\nhigh"} /></div>
+                <div style={{ marginBottom: 6 }}><Field label={<span style={{ fontSize: "0.85em" }}>Choices (one per line)</span>}><Textarea value={newPromptInput.choices ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, choices: e.target.value }))} style={{ minHeight: 56 }} placeholder={"low\nmedium\nhigh"} /></Field></div>
               )}
-              <div className="field" style={{ marginBottom: 6 }}><label style={{ fontSize: "0.85em" }}>Placeholder / help (optional)</label><input value={newPromptInput.placeholder ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, placeholder: e.target.value }))} /></div>
+              <div style={{ marginBottom: 6 }}><Field label={<span style={{ fontSize: "0.85em" }}>Placeholder / help (optional)</span>}><Input value={newPromptInput.placeholder ?? ""} onChange={(e) => setNewPromptInput((s) => ({ ...s, placeholder: e.target.value }))} /></Field></div>
               <div style={{ display: "flex", gap: 16, marginBottom: 8 }}>
                 <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: "0.85em" }}>
                   <input type="checkbox" checked={newPromptInput.required} onChange={(e) => setNewPromptInput((s) => ({ ...s, required: e.target.checked }))} /> Required
@@ -715,12 +717,12 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
                   <input type="checkbox" checked={newPromptInput.includeInPrompt} onChange={(e) => setNewPromptInput((s) => ({ ...s, includeInPrompt: e.target.checked }))} /> Include in prompt
                 </label>
               </div>
-              <button className="secondary-button" style={{ fontSize: "0.82em" }} disabled={!newPromptInput.label.trim()} onClick={addPromptInput}>+ Add input</button>
+              <Button variant="secondary" style={{ fontSize: "0.82em" }} disabled={!newPromptInput.label.trim()} onClick={addPromptInput}>+ Add input</Button>
             </div>
 
             <div className="button-row">
-              <button className="secondary-button" disabled={!newPrompt.id.trim() || !newPrompt.name.trim()} onClick={addPrompt}>+ Add prompt</button>
-              <button className="primary-button" onClick={() => setStep("review")}>Next: Review →</button>
+              <Button variant="secondary" disabled={!newPrompt.id.trim() || !newPrompt.name.trim()} onClick={addPrompt}>+ Add prompt</Button>
+              <Button onClick={() => setStep("review")}>Next: Review →</Button>
             </div>
           </>
         )}
@@ -739,17 +741,17 @@ function GuidedBuilder({ forge, notify, onOpen }: { forge: Forge; notify: Notify
             </div>
             {!canCreate && <p className="inline-warning">Fill in Kit ID, Name, and Description to create.</p>}
             <div className="button-row">
-              <button className="secondary-button" onClick={() => setStep("basics")}>← Back</button>
-              <button className="primary-button" disabled={!canCreate || busy} onClick={() => void create()}>
+              <Button variant="secondary" onClick={() => setStep("basics")}>← Back</Button>
+              <Button disabled={!canCreate || busy} loading={busy} onClick={() => void create()}>
                 {busy ? "Creating…" : "Create kit"}
-              </button>
+              </Button>
             </div>
           </>
         )}
 
         {stepIdx < STEPS.length - 1 && step !== "basics" && step !== "skills" && step !== "policies" && step !== "prompts" && step !== "review" && (
           <div className="button-row" style={{ marginTop: 12 }}>
-            <button className="secondary-button" onClick={() => setStep(STEPS[Math.max(0, stepIdx - 1)].id)}>← Back</button>
+            <Button variant="secondary" onClick={() => setStep(STEPS[Math.max(0, stepIdx - 1)].id)}>← Back</Button>
           </div>
         )}
       </div>
@@ -830,18 +832,17 @@ function EditWithAi({
       <div className="form-panel">
         <h2>Edit existing kit with AI</h2>
         <p className="form-copy">Load an owned kit as a draft, request AI revisions, then render the updated kit. The original kit is not modified until you render.</p>
-        <div className="field">
-          <label>Kit to edit</label>
-          <select value={kitId} onChange={(e) => setKitId(e.target.value)}>
+        <Field label="Kit to edit">
+          <Select value={kitId} onChange={(e) => setKitId(e.target.value)}>
             <option value="">Select a kit…</option>
             {kits.map((k) => (
               <option key={k.kitId} value={k.kitId}>{k.name ?? k.kitId}</option>
             ))}
-          </select>
-        </div>
-        <button className="secondary-button" disabled={!kitId || busy} onClick={() => void loadDraft(kitId)}>
+          </Select>
+        </Field>
+        <Button variant="secondary" disabled={!kitId || busy} loading={busy && !draft} onClick={() => void loadDraft(kitId)}>
           {busy && !draft ? "Loading…" : "Load as draft"}
-        </button>
+        </Button>
         {draft != null && (
           <>
             <ManagedModelSelector
@@ -850,17 +851,18 @@ function EditWithAi({
               model={managed.model}
               setModel={managed.setModel}
             />
-            <div className="field" style={{ marginTop: 12 }}>
-              <label>What should change?</label>
-              <textarea value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for executive summary generation, improve the description" />
+            <div style={{ marginTop: 12 }}>
+              <Field label="What should change?">
+                <Textarea value={changeRequest} onChange={(e) => setChangeRequest(e.target.value)} placeholder="e.g. add a skill for executive summary generation, improve the description" />
+              </Field>
             </div>
             <div className="button-row">
-              <button className="secondary-button" disabled={!changeRequest.trim() || busy} onClick={() => void revise()}>
+              <Button variant="secondary" disabled={!changeRequest.trim() || busy} loading={busy} onClick={() => void revise()}>
                 {busy ? "Revising…" : "Revise with AI"}
-              </button>
-              <button className="primary-button" disabled={busy} onClick={() => void render()}>
+              </Button>
+              <Button disabled={busy} onClick={() => void render()}>
                 Render updated kit
-              </button>
+              </Button>
             </div>
           </>
         )}
@@ -891,27 +893,22 @@ function BuildFromTemplate({ forge, notify, onOpen }: { forge: Forge; notify: No
       <div className="form-panel">
         <h2>Create from template</h2>
         <p className="form-copy">Scaffold a new Agent Kit from a starter template, then open it in the editor.</p>
-        <div className="field">
-          <label>Template</label>
-          <select value={template} onChange={(e) => setTemplate(e.target.value)}>
+        <Field label="Template">
+          <Select value={template} onChange={(e) => setTemplate(e.target.value)}>
             <option value="blank">blank</option>
             <option value="financial-review">financial-review</option>
-          </select>
-        </div>
-        <div className="field">
-          <label>Kit id (slug)</label>
-          <input value={id} onChange={(e) => setId(e.target.value)} placeholder="my-kit" />
-        </div>
-        <div className="field">
-          <label>Name</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Kit" />
-        </div>
-        <div className="field">
-          <label>Description</label>
-          <textarea value={description} onChange={(e) => setDescription(e.target.value)} />
-        </div>
-        <button
-          className="primary-button"
+          </Select>
+        </Field>
+        <Field label="Kit id (slug)">
+          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="my-kit" />
+        </Field>
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="My Kit" />
+        </Field>
+        <Field label="Description">
+          <Textarea value={description} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        <Button
           disabled={!valid || busy}
           onClick={async () => {
             setBusy(true);
@@ -927,7 +924,7 @@ function BuildFromTemplate({ forge, notify, onOpen }: { forge: Forge; notify: No
           }}
         >
           {busy ? "Creating…" : "Create kit"}
-        </button>
+        </Button>
       </div>
       <div className="results-panel">
         <h2>What you get</h2>
@@ -946,12 +943,10 @@ function RenderDraftJson({ forge, notify, onOpen }: { forge: Forge; notify: Noti
       <div className="form-panel">
         <h2>Render a draft JSON</h2>
         <p className="form-copy">Paste an Agent Kit draft (the JSON the AI builder produces) to render it into a new kit in your library.</p>
-        <div className="field">
-          <label>Draft JSON</label>
-          <textarea value={text} onChange={(e) => setText(e.target.value)} style={{ minHeight: 220, fontFamily: "var(--mono, monospace)" }} placeholder='{ "manifest": { ... }, "files": { ... } }' />
-        </div>
-        <button
-          className="primary-button"
+        <Field label="Draft JSON">
+          <Textarea value={text} onChange={(e) => setText(e.target.value)} style={{ minHeight: 220, fontFamily: "var(--mono, monospace)" }} placeholder='{ "manifest": { ... }, "files": { ... } }' />
+        </Field>
+        <Button
           disabled={!text.trim() || busy}
           onClick={async () => {
             setBusy(true);
@@ -968,7 +963,7 @@ function RenderDraftJson({ forge, notify, onOpen }: { forge: Forge; notify: Noti
           }}
         >
           {busy ? "Rendering…" : "Render into a kit"}
-        </button>
+        </Button>
       </div>
       <div className="results-panel">
         <h2>Draft format</h2>

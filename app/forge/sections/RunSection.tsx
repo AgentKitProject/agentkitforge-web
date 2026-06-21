@@ -11,6 +11,7 @@
 // WebForgeClient.runAgentKitWithAi). A 402 insufficient-credits response surfaces
 // the existing inline top-up affordance.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Field, Select, Textarea } from "@agentkitforge/ui";
 import type { Forge, MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 import { HttpError } from "@/forge-client";
@@ -153,29 +154,26 @@ export function RunSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
 
           <CreditsPanel notify={notify} />
 
-          <div className="field">
-            <label>Kit</label>
-            <select value={kitId} onChange={(e) => onKitChange(e.target.value)}>
+          <Field label="Kit">
+            <Select value={kitId} onChange={(e) => onKitChange(e.target.value)}>
               <option value="">Select a kit…</option>
               {kits.map((k) => (
                 <option key={k.kitId} value={k.kitId}>{k.name ?? k.kitId}</option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
-          <div className="field">
-            <label>Model</label>
-            <select value={model} onChange={(e) => setModel(e.target.value)} disabled={!models.length}>
+          <Field label="Model">
+            <Select value={model} onChange={(e) => setModel(e.target.value)} disabled={!models.length}>
               {models.length === 0 && <option value="">Default</option>}
               {models.map((m) => (
                 <option key={m.id} value={m.id}>{m.label}</option>
               ))}
-            </select>
-          </div>
+            </Select>
+          </Field>
 
-          <div className="field">
-            <label>Message</label>
-            <textarea
+          <Field label="Message">
+            <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={(e) => {
@@ -185,16 +183,16 @@ export function RunSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
               style={{ minHeight: 100 }}
               disabled={!kitId || busy}
             />
-          </div>
+          </Field>
 
           <div className="button-row" style={{ marginTop: 4 }}>
-            <button className="primary-button" disabled={!kitId || !prompt.trim() || busy} onClick={() => void send()}>
+            <Button disabled={!kitId || !prompt.trim() || busy} loading={busy} onClick={() => void send()}>
               {busy ? "Generating…" : "Send"}
-            </button>
+            </Button>
             {messages.length > 0 && (
-              <button className="secondary-button" disabled={busy} onClick={resetSession}>
+              <Button variant="secondary" disabled={busy} onClick={resetSession}>
                 New chat
-              </button>
+              </Button>
             )}
           </div>
 

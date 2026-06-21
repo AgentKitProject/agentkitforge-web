@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Badge, Button, Field, Input } from "@agentkitforge/ui";
 import { StarIcon } from "../icons";
 import type { Forge, Notify } from "./shared";
 import { errMsg } from "./shared";
@@ -80,46 +81,43 @@ export function ImportSection({
               <label>Package file</label>
               <input type="file" accept=".zip" onChange={(e) => setZipFile(e.target.files?.[0] ?? null)} />
             </div>
-            <button className="primary-button" disabled={!zipFile || busy} onClick={() => run(() => forge.importAgentKitPackage({ file: zipFile } as never), "Imported from zip.")}>
+            <Button disabled={!zipFile || busy} loading={busy} onClick={() => run(() => forge.importAgentKitPackage({ file: zipFile } as never), "Imported from zip.")}>
               {busy ? "Importing…" : "Import zip"}
-            </button>
+            </Button>
           </div>
         )}
         {tab === "git" && (
           <div className="form-panel">
             <h2>Import from a Git repository</h2>
             <p className="form-copy">Clone a public repository that contains an Agent Kit and save it to <strong>My Kits</strong> (your library). The kit is persisted to your account.</p>
-            <div className="field">
-              <label>Repository URL</label>
-              <input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/org/repo.git" />
-            </div>
-            <div className="field">
-              <label>Ref (optional)</label>
-              <input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" />
-            </div>
-            <button
-              className="primary-button"
+            <Field label="Repository URL">
+              <Input value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/org/repo.git" />
+            </Field>
+            <Field label="Ref (optional)">
+              <Input value={ref} onChange={(e) => setRef(e.target.value)} placeholder="main" />
+            </Field>
+            <Button
               disabled={!repoUrl || busy}
+              loading={busy}
               onClick={() => run(() => forge.importAgentKitFromGit({ repositoryUrl: repoUrl, reference: ref, destinationRootFolder: "", validationProfile: "local-valid" }), "Imported from Git.")}
             >
               {busy ? "Importing…" : "Import git"}
-            </button>
+            </Button>
           </div>
         )}
         {tab === "market" && (
           <div className="form-panel">
             <h2>Import from AgentKitMarket</h2>
             <p className="form-copy"><strong>Import</strong> downloads the kit into <strong>My Kits</strong> (your library) so you can edit, validate, and package it. <strong>Favorite</strong> saves a reference so you can track updates without downloading a copy.</p>
-            <div className="field">
-              <label>Market slug</label>
-              <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="financial-review" />
-            </div>
+            <Field label="Market slug">
+              <Input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="financial-review" />
+            </Field>
             <div className="button-row">
-              <button className="primary-button" disabled={!slug || busy} onClick={() => run(() => forge.importHostedMarketKit({ slug, marketBaseUrl: "", validationProfile: "local-valid" }), "Imported from Market.")}>
+              <Button disabled={!slug || busy} onClick={() => run(() => forge.importHostedMarketKit({ slug, marketBaseUrl: "", validationProfile: "local-valid" }), "Imported from Market.")}>
                 Import
-              </button>
-              <button
-                className="secondary-button"
+              </Button>
+              <Button
+                variant="secondary"
                 disabled={!slug || busy}
                 onClick={() =>
                   run(async () => {
@@ -134,7 +132,7 @@ export function ImportSection({
                 }
               >
                 <StarIcon size={14} /> Favorite
-              </button>
+              </Button>
             </div>
           </div>
         )}
@@ -287,22 +285,22 @@ function OrgKitsPanel({
               </div>
             </div>
             <div className="button-row">
-              <button
-                className="secondary-button"
+              <Button
+                variant="secondary"
                 onClick={() => loadOrgKits(org)}
                 disabled={kitsLoading && selectedOrg?.id === org.id}
               >
                 {kitsLoading && selectedOrg?.id === org.id ? "Loading…" : "Browse kits"}
-              </button>
-              <a
-                className="secondary-button"
+              </Button>
+              <Button
+                variant="secondary"
                 href={`https://market.agentkitproject.com/orgs/${encodeURIComponent(org.id)}`}
                 target="_blank"
                 rel="noreferrer"
                 style={{ textDecoration: "none" }}
               >
                 View on Market
-              </a>
+              </Button>
             </div>
           </article>
         ))}
@@ -328,16 +326,16 @@ function OrgKitsPanel({
                         <span className="inline-code">{k.slug}</span>
                         {k.currentVersion != null && <span> · v{k.currentVersion}</span>}
                         {k.visibility === "private" && (
-                          <span className="source-badge" style={{ marginLeft: 6 }}>private</span>
+                          <Badge tone="neutral" style={{ marginLeft: 6 }}>private</Badge>
                         )}
                       </p>
                     </div>
                   </div>
                   <div className="button-row">
-                    <button className="primary-button" disabled={busy} onClick={() => void importKit(k.slug)}>Import</button>
-                    <button className="secondary-button" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
+                    <Button disabled={busy} onClick={() => void importKit(k.slug)}>Import</Button>
+                    <Button variant="secondary" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
                       <StarIcon size={13} /> Favorite
-                    </button>
+                    </Button>
                   </div>
                 </article>
               ))}
@@ -442,14 +440,14 @@ function MarketBrowsePanel({
       <h2>Browse AgentKitMarket</h2>
       <p className="form-copy">Browse the public kit catalog. Import to add to your library, or Favorite to track updates.</p>
       <form onSubmit={(e) => void handleSearch(e)} style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        <input
+        <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search kits…"
           style={{ flex: 1 }}
         />
-        <button type="submit" className="secondary-button" disabled={loading}>Search</button>
-        {search && <button type="button" className="secondary-button" onClick={() => { setSearch(""); void loadPage(); }}>Clear</button>}
+        <Button type="submit" variant="secondary" disabled={loading}>Search</Button>
+        {search && <Button type="button" variant="secondary" onClick={() => { setSearch(""); void loadPage(); }}>Clear</Button>}
       </form>
 
       {error && <p className="inline-warning">{error}</p>}
@@ -471,25 +469,25 @@ function MarketBrowsePanel({
                   </p>
                   {k.categories && k.categories.length > 0 && (
                     <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-                      {k.categories.map((c) => <span key={c} className="source-badge">{c}</span>)}
+                      {k.categories.map((c) => <Badge key={c} tone="neutral">{c}</Badge>)}
                     </div>
                   )}
                 </div>
               </div>
               <div className="button-row">
-                <button className="primary-button" disabled={busy} onClick={() => void importKit(k.slug)}>Import</button>
-                <button className="secondary-button" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
+                <Button disabled={busy} onClick={() => void importKit(k.slug)}>Import</Button>
+                <Button variant="secondary" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
                   <StarIcon size={13} /> Favorite
-                </button>
-                <a
-                  className="secondary-button"
+                </Button>
+                <Button
+                  variant="secondary"
                   href={`https://market.agentkitproject.com/kits/${k.slug}`}
                   target="_blank"
                   rel="noreferrer"
                   style={{ textDecoration: "none" }}
                 >
                   View on Market
-                </a>
+                </Button>
               </div>
             </article>
           ))}
@@ -504,9 +502,9 @@ function MarketBrowsePanel({
 
       {hasMore && (
         <div style={{ marginTop: 16, textAlign: "center" }}>
-          <button className="secondary-button" disabled={loading} onClick={() => void loadPage(nextCursor, search || undefined)}>
+          <Button variant="secondary" disabled={loading} onClick={() => void loadPage(nextCursor, search || undefined)}>
             {loading ? "Loading…" : "Load more"}
-          </button>
+          </Button>
         </div>
       )}
     </div>
