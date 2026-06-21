@@ -387,6 +387,14 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       family: "agentkit-auto-worker"
     });
 
+    // Phase D (hardened isolation): a writable, run-ephemeral scratch volume.
+    // With readonlyRootFilesystem=true below, the container's "/" is read-only,
+    // so the worker's per-run workspaces (auto-core FsWorkspaceStore) need a
+    // dedicated writable mount. An empty volume config = a Fargate
+    // ephemeral-storage-backed volume (no EFS, no host path); it lives and dies
+    // with the task, which matches the run-ephemeral workspace model exactly.
+    taskDef.addVolume({ name: "scratch" });
+
     // Non-secret config as plain environment.
     const containerEnv: { [key: string]: string } = {
       AUTO_RUNS_TABLE: autoRunsTable.tableName,
@@ -406,7 +414,13 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       FORGE_AWS_REGION: this.region,
       // Phase D: the from-address the worker's EmailSender uses for result
       // delivery. Must be (a subdomain of) the verified SES identity above.
-      SES_SENDER: sesSender
+      SES_SENDER: sesSender,
+      // Phase D (hardened isolation): the worker writes per-run workspaces here.
+      // With readonlyRootFilesystem the only writable path is the "scratch"
+      // ephemeral volume mounted at /scratch; point auto-core's workspace root
+      // at a subdir of it. auto-core falls back to os.tmpdir() when unset
+      // (self-host / dev), so this is purely the hosted-Fargate override.
+      AUTO_WORKSPACE_DIR: "/scratch/agentkitauto-workspaces"
     };
     // Phase A: ANTHROPIC_API_KEY (platform key) and AUTO_WORKER_SERVICE_KEY are
     // passed as plain env from CDK context for simplicity; migrate to Secrets
@@ -420,16 +434,59 @@ export class AgentKitForgeWebStack extends cdk.Stack {
       containerEnv.AUTO_WORKER_SERVICE_KEY = autoWorkerServiceKey;
     }
 
+    // Phase D (hardened isolation): drop ALL Linux capabilities. The worker is a
+    // pure Node process (HTTPS to Anthropic/web-forge, DynamoDB/S3 via the task
+    // role, local fs writes to the scratch mount) — it needs no kernel
+    // capabilities at all. Dropping ALL is the strongest, cleanest posture and
+    // is honored by Fargate's platform.
+    const linuxParameters = new ecs.LinuxParameters(this, "AutoWorkerLinuxParams");
+    linuxParameters.dropCapabilities(ecs.Capability.ALL);
+
     // Container name MUST stay exactly "auto-worker" — the dispatcher's
     // RunTask container override targets this name.
-    taskDef.addContainer("auto-worker", {
+    const container = taskDef.addContainer("auto-worker", {
       image: ecs.ContainerImage.fromEcrRepository(workerRepo, "latest"),
       logging: ecs.LogDrivers.awsLogs({
         streamPrefix: "auto-worker",
         logGroup
       }),
-      environment: containerEnv
+      environment: containerEnv,
+      // ── Hardened container security posture (Phase D) ──────────────────────
+      // 1. Drop ALL Linux capabilities (linuxParameters, above).
+      linuxParameters,
+      // 2. Read-only root filesystem. The image + all node_modules/dist are
+      //    immutable at runtime; the ONLY writable path is the /scratch mount.
+      readonlyRootFilesystem: true
+      // 3. Non-root FINAL process. Enforced in the image, NOT via the task-def
+      //    `user` field — deliberately. Fargate mounts the scratch volume
+      //    root-owned, and node (uid 1000) cannot write to a root-owned mount.
+      //    So the container's PID 1 (the entrypoint) MUST start as root to
+      //    `chown -R node:node /scratch`, then drops to `node` via `gosu` before
+      //    exec'ing the worker. Pinning `user: "node"` here would start PID 1 as
+      //    node, making the chown impossible and breaking every run. The
+      //    security guarantee (non-root WORKER) is therefore enforced by the
+      //    entrypoint's gosu drop (see Dockerfile / docker-entrypoint.sh): only
+      //    the throwaway chown step is root; the long-lived node process is not.
+      // 4. privileged is false by default (never set). Fargate has no
+      //    `--security-opt no-new-privileges` knob, but dropping ALL caps +
+      //    a non-root final process + a read-only root fs covers that intent: a
+      //    non-root process with no capabilities and an immutable rootfs cannot
+      //    escalate.
     });
+
+    // Mount the writable scratch volume. readOnly:false — this is the one path
+    // the worker may write (per-run workspaces under
+    // /scratch/agentkitauto-workspaces, see AUTO_WORKSPACE_DIR).
+    container.addMountPoints({
+      sourceVolume: "scratch",
+      containerPath: "/scratch",
+      readOnly: false
+    });
+
+    // Egress (item 4): the AutoWorkerSg above already allows ONLY 443 + DNS
+    // (UDP/TCP 53) outbound with allowAllOutbound:false — confirmed minimal and
+    // left as-is. App-level traffic is further constrained by the auto-core
+    // allowlist + SSRF guard; the SG is the network-layer floor.
 
     // ---- 6. Grant the out-of-band SSR IAM user -------------------------------
     // IAM users have a HARD 2048-byte INLINE policy limit. The SSR user's inline
