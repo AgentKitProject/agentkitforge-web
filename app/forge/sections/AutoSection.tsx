@@ -22,6 +22,7 @@ import { autoRoutes } from "@agentkitforge/contracts";
 import type { MyKitEntry, Notify } from "./shared";
 import { errMsg } from "./shared";
 import { AutoLogo } from "./AutoLogo";
+import { ClientTime } from "./ClientTime";
 
 // AgentKitAuto accent. Wrapping the section in brandVars(AUTO_GREEN) re-themes
 // every framework primitive (buttons, badges, focus rings, active nav) inside
@@ -108,11 +109,6 @@ function centsToUsd(c: number): string {
   return `$${(c / 100).toFixed(2)}`;
 }
 
-function fmtTs(ts: string | null): string {
-  if (!ts) return "—";
-  const d = new Date(ts);
-  return Number.isNaN(d.getTime()) ? "—" : d.toLocaleString();
-}
 
 /** The browser's IANA timezone, used as the schedule default. */
 function localTimezone(): string {
@@ -791,7 +787,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                     <code style={{ fontSize: "0.9em" }}>{s.cron}</code>{" "}
                     <span style={{ color: "var(--color-text-secondary)" }}>({s.timezone})</span>
                     <div style={{ color: "var(--color-text-secondary)" }}>
-                      {centsToUsd(s.budgetCents)}/run · next {fmtTs(s.nextRunAt)} · last {fmtTs(s.lastRunAt)}
+                      {centsToUsd(s.budgetCents)}/run · next <ClientTime ts={s.nextRunAt} /> · last <ClientTime ts={s.lastRunAt} />
                     </div>
                     {s.lastError && (
                       <div style={{ color: "var(--color-error)" }}>last error: {s.lastError}</div>
@@ -870,7 +866,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                   <div style={{ fontSize: "0.85em", overflow: "hidden" }}>
                     <strong>{kitLabel(w.kitRef.localKitId)}</strong>
                     <div style={{ color: "var(--color-text-secondary)" }}>
-                      {centsToUsd(w.budgetCents)}/fire · fired {w.fireCount}× · last {fmtTs(w.lastFiredAt)}
+                      {centsToUsd(w.budgetCents)}/fire · fired {w.fireCount}× · last <ClientTime ts={w.lastFiredAt} />
                     </div>
                     <div style={{ color: "var(--color-text-secondary)", wordBreak: "break-all", fontSize: "0.9em" }}>
                       <code>{w.ingestUrl}</code>
@@ -911,7 +907,7 @@ export function AutoSection({ kits, notify }: { kits: MyKitEntry[]; notify: Noti
                 <Badge tone={ACTIVE.has(r.status) ? "brand" : "neutral"}>{r.status}</Badge>
               </div>
               <div style={{ fontSize: "0.78em", color: "var(--color-text-secondary)" }}>
-                {centsToUsd(r.spentCents)} / {centsToUsd(r.budgetCents)} · {new Date(r.createdAt).toLocaleString()}
+                {centsToUsd(r.spentCents)} / {centsToUsd(r.budgetCents)} · <ClientTime ts={r.createdAt} />
               </div>
             </div>
           ))
