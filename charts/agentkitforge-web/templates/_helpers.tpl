@@ -73,3 +73,35 @@ In-cluster MinIO endpoint.
 {{- define "agentkitforge-web.minioEndpoint" -}}
 http://{{ include "agentkitforge-web.fullname" . }}-minio:9000
 {{- end }}
+
+{{/*
+Web ServiceAccount name. When Auto is enabled the web pod runs under a dedicated
+ServiceAccount so RBAC can grant it Job-management permissions in its namespace.
+*/}}
+{{- define "agentkitforge-web.webServiceAccountName" -}}
+{{ include "agentkitforge-web.fullname" . }}-web
+{{- end }}
+
+{{/*
+In-cluster web Service URL (used by the Auto worker + sweep to reach the app's
+internal endpoints). Honors auto.internalUrl when set.
+*/}}
+{{- define "agentkitforge-web.webInternalUrl" -}}
+{{- if .Values.auto.internalUrl -}}
+{{ .Values.auto.internalUrl }}
+{{- else -}}
+http://{{ include "agentkitforge-web.fullname" . }}-web
+{{- end -}}
+{{- end }}
+
+{{/*
+The namespace the Auto dispatcher creates Jobs in (auto.namespace or the release
+namespace).
+*/}}
+{{- define "agentkitforge-web.autoNamespace" -}}
+{{- if .Values.auto.namespace -}}
+{{ .Values.auto.namespace }}
+{{- else -}}
+{{ .Release.Namespace }}
+{{- end -}}
+{{- end }}

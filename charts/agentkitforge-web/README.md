@@ -60,6 +60,16 @@ in sync with whatever you set, or override `minio.rootUser`.
 Optional keys: `AGENTKITPROJECT_WORKOS_CLIENT_ID` (device/licensed flows;
 usually equals `WORKOS_CLIENT_ID`).
 
+When **AgentKitAuto** is enabled (`auto.enabled=true`), also add:
+
+| Key | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | Inference key — operator BYO key (free) or managed key |
+| `AUTO_WORKER_SERVICE_KEY` | Service key the sweep + worker present to the internal Auto endpoints (`openssl rand -hex 32`) |
+
+See [`docs/SELF_HOST_AUTO.md`](../../docs/SELF_HOST_AUTO.md) for the full Auto
+self-host guide (worker image, RBAC, sweep CronJob, billing policy).
+
 > Until those keys exist in Infisical, the `agentkitforge-web-secrets` Secret is
 > empty/absent and the web pod will **crashloop / stay pending** — this is
 > expected during GitOps bootstrap.

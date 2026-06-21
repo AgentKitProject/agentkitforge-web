@@ -77,6 +77,7 @@ import { autoHookRoutes } from "@agentkitforge/contracts";
 import { awsClientEnv } from "@/server/aws-client";
 import { getAppUrl } from "@/lib/url-config";
 import { fargateDispatcher } from "@/server/core/auto-fargate-dispatcher";
+import { kubeJobDispatcher } from "@/server/core/auto-kube-dispatcher";
 import { getBalanceCents, getCreditLedger } from "@/server/core/gateway";
 import { getUserSettingsStore } from "@/server/store/user-settings";
 import { getKitStore } from "@/server/store/index";
@@ -146,6 +147,11 @@ export async function getAutoStorage(): Promise<AutoStorageDeps> {
     // Reuse the KitStore's Postgres pool so Auto rows live in the same database.
     const { getSelfHostPgPool } = await import("@/server/store/selfhost-user-settings");
     const pool = await getSelfHostPgPool();
+    // Ensure the four Auto tables exist (idempotent CREATE TABLE IF NOT EXISTS).
+    // The app creates them next to the rest of its self-host schema; the k8s
+    // worker also ensures them on boot, so either side bootstrapping is safe.
+    const { ensureAutoSchema } = await import("@agentkitforge/auto-core");
+    await ensureAutoSchema(pool as never);
     storageSingleton = makeAutoDeps({ backend: "selfhost", pool });
   } else {
     const env = awsClientEnv();
@@ -539,23 +545,38 @@ export function setAutoDispatcher(next: AutoDispatcher, isCloudRun = false): voi
 }
 
 /**
- * One-time dispatcher selection at module import. HOSTED deploys opt into the
- * Fargate worker via AUTO_DISPATCH=fargate AND an AWS KitStore backend; every
- * other configuration (dev, self-host, local, unset) keeps the in-process
- * dispatcher. This MUST no-op to in-process when the envs are unset so tests that
- * call setAutoDispatcher() directly stay in control (test/auto.test.ts). The
- * @aws-sdk/client-ecs import only happens when fargate is actually selected.
+ * One-time dispatcher selection at module import.
+ *
+ *   - HOSTED: AUTO_DISPATCH=fargate AND an AWS KitStore backend → the Fargate
+ *     worker (isCloudRun=true; BYO runs incur the per-minute compute fee).
+ *   - SELF-HOST: AUTO_DISPATCH=k8s AND a selfhost KitStore backend → the
+ *     Kubernetes Job-per-run worker. The self-host billing policy drives
+ *     isCloudRun: default "free" (BYO, no metering) → isCloudRun=false;
+ *     AUTO_SELFHOST_BILLING=managed → isCloudRun=true so the metered compute fee
+ *     applies (the worker then uses the selfhost Postgres credit ledger).
+ *   - Every other configuration (dev, local, unset) keeps the in-process
+ *     dispatcher.
+ *
+ * This MUST no-op to in-process when the envs are unset so tests that call
+ * setAutoDispatcher() directly stay in control (test/auto.test.ts). The
+ * @aws-sdk/client-ecs and @kubernetes/client-node imports are lazy inside their
+ * dispatchers, so this selection never touches a cloud client unless dispatched.
  */
 let dispatcherInitialized = false;
 export function initAutoDispatcher(): void {
   if (dispatcherInitialized) return;
   dispatcherInitialized = true;
-  const wantFargate = process.env.AUTO_DISPATCH === "fargate";
-  const awsBackend = (process.env.KITSTORE_BACKEND || "local").toLowerCase() === "aws";
-  if (wantFargate && awsBackend) {
-    // Static import (top of module) — @aws-sdk/client-ecs is a normal dep, so
-    // importing it is safe; we only ENGAGE the Fargate dispatcher when selected.
+  const dispatch = (process.env.AUTO_DISPATCH || "").toLowerCase();
+  const kitBackend = (process.env.KITSTORE_BACKEND || "local").toLowerCase();
+  if (dispatch === "fargate" && kitBackend === "aws") {
+    // @aws-sdk/client-ecs is lazy-imported inside the Fargate dispatcher.
     setAutoDispatcher(fargateDispatcher, /* isCloudRun */ true);
+  } else if (dispatch === "k8s" && kitBackend === "selfhost") {
+    // Self-host k8s Job worker. Free billing (default) is NOT a cloud run (no
+    // metered compute fee); managed billing IS (the worker uses the selfhost
+    // Postgres ledger). @kubernetes/client-node is lazy-imported on dispatch.
+    const managed = (process.env.AUTO_SELFHOST_BILLING || "free").toLowerCase() === "managed";
+    setAutoDispatcher(kubeJobDispatcher, /* isCloudRun */ managed);
   }
   // else: leave the default inProcessDispatcher (isCloudRun false).
 }
