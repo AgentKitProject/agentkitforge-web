@@ -8,7 +8,7 @@
 // seam is unchanged — all HTTP calls still go through forge-client/web-client.ts.
 
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppShell, SidebarAccount, type SidebarNavItem } from "@agentkitforge/ui";
 import { getForgeClient } from "@/forge-client";
 import type { MyKitEntry } from "@/forge-client";
@@ -101,12 +101,29 @@ function initials(email?: string): string {
 
 // Persisted theme: reads/writes localStorage "akf-theme"
 function useTheme(): [string, () => void] {
-  const [theme, setTheme] = useState<string>(() => {
-    if (typeof window === "undefined") return "light";
-    return localStorage.getItem("akf-theme") ?? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  });
+  // Default to "light" for the FIRST render on BOTH server and client so the
+  // server-rendered HTML matches the client's initial render (no React #418
+  // hydration mismatch). The real persisted/system theme is read AFTER mount
+  // in the effect below (a pure client update, no hydration involved). The
+  // inline script in app/layout.tsx sets data-theme pre-paint to avoid a flash.
+  const [theme, setTheme] = useState<string>("light");
 
   useEffect(() => {
+    const saved =
+      localStorage.getItem("akf-theme") ??
+      (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    setTheme(saved);
+  }, []);
+
+  // Skip the first render (theme="light" placeholder): the inline layout script
+  // already set the correct data-theme pre-paint, so applying "light" here would
+  // cause a one-frame flash before the real theme loads. Apply on every change after.
+  const themeSynced = useRef(false);
+  useEffect(() => {
+    if (!themeSynced.current) {
+      themeSynced.current = true;
+      return;
+    }
     document.documentElement.setAttribute("data-theme", theme);
     localStorage.setItem("akf-theme", theme);
   }, [theme]);
