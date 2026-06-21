@@ -16,6 +16,7 @@ import {
   AutoValidationError,
   InsufficientComputeBalanceError,
   listRuns,
+  parseDeliveryConfig,
   parseInputFiles,
   parseKitRef,
   startRun
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
     budgetCents?: unknown;
     model?: unknown;
     inputFiles?: unknown;
+    deliveryConfig?: unknown;
   };
 
   try {
@@ -60,6 +62,9 @@ export async function POST(request: Request) {
     const model = typeof body.model === "string" ? body.model : undefined;
     // Phase C: out-of-band staged input files (presigned-uploaded then referenced).
     const inputFiles = parseInputFiles(body.inputFiles);
+    // Phase D: opt-in result delivery (email + signed webhook). Validated here
+    // (https-only webhook, basic email format) → AutoValidationError → 400.
+    const deliveryConfig = parseDeliveryConfig(body.deliveryConfig);
 
     const run = await startRun({
       userId,
@@ -69,6 +74,7 @@ export async function POST(request: Request) {
       ...(model ? { model } : {}),
       ...(files ? { files } : {}),
       ...(inputFiles.length > 0 ? { inputFiles } : {}),
+      ...(deliveryConfig ? { deliveryConfig } : {}),
       // Cookie path: kit-context resolution uses the cookie forwarding store for
       // protected/Market kits (no forwarded bearer here).
       kitContext: {}

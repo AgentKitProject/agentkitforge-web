@@ -15,6 +15,7 @@ import {
   AutoValidationError,
   createSchedule,
   listSchedules,
+  parseDeliveryConfig,
   parseKitRef
 } from "@/server/core/auto";
 
@@ -29,6 +30,7 @@ type ScheduleBody = {
   budgetCents?: unknown;
   model?: unknown;
   approvalId?: unknown;
+  deliveryConfig?: unknown;
 };
 
 /** Shared body → createSchedule args parsing (used by both auth siblings via copy;
@@ -67,6 +69,8 @@ export async function POST(request: Request) {
     const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
     const model = typeof body.model === "string" ? body.model : undefined;
     const approvalId = typeof body.approvalId === "string" ? body.approvalId : "";
+    // Phase D: opt-in result delivery copied onto every run this schedule fires.
+    const deliveryConfig = parseDeliveryConfig(body.deliveryConfig);
 
     const schedule = await createSchedule({
       userId,
@@ -77,7 +81,8 @@ export async function POST(request: Request) {
       budgetCents,
       approvalId,
       ...(model ? { model } : {}),
-      ...(files ? { files } : {})
+      ...(files ? { files } : {}),
+      ...(deliveryConfig ? { deliveryConfig } : {})
     });
     return Response.json(schedule, { status: 201 });
   } catch (error) {

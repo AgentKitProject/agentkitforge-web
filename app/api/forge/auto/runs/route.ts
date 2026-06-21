@@ -15,6 +15,7 @@ import {
   AutoValidationError,
   InsufficientComputeBalanceError,
   listRuns,
+  parseDeliveryConfig,
   parseInputFiles,
   parseKitRef,
   startRun
@@ -41,6 +42,7 @@ export async function POST(request: Request) {
     budgetCents?: unknown;
     model?: unknown;
     inputFiles?: unknown;
+    deliveryConfig?: unknown;
   };
 
   try {
@@ -61,6 +63,9 @@ export async function POST(request: Request) {
     const budgetCents = typeof body.budgetCents === "number" ? body.budgetCents : NaN;
     const model = typeof body.model === "string" ? body.model : undefined;
     const inputFiles = parseInputFiles(body.inputFiles);
+    // Phase D: opt-in result delivery (email + signed webhook). Validated here
+    // (https-only webhook, basic email format) → AutoValidationError → 400.
+    const deliveryConfig = parseDeliveryConfig(body.deliveryConfig);
 
     const run = await startRun({
       userId,
@@ -70,6 +75,7 @@ export async function POST(request: Request) {
       ...(model ? { model } : {}),
       ...(files ? { files } : {}),
       ...(inputFiles.length > 0 ? { inputFiles } : {}),
+      ...(deliveryConfig ? { deliveryConfig } : {}),
       // Forge path: forward the already-verified bearer so protected/Market kit
       // context is fetched + entitlement-checked server-side at run time.
       kitContext: bearerToken ? { bearerToken } : {}
