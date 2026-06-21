@@ -8,6 +8,7 @@
 //          Market kit is fetched + entitlement-checked server-side. Enforces the
 //          approval gate (403 on denial), creates + DISPATCHES the run.
 //   GET  → list the user's runs.
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError, parseBearerToken } from "@/lib/forge-auth";
 import {
   ApprovalDeniedError,
@@ -76,14 +77,14 @@ export async function POST(request: Request) {
     return Response.json({ id: run.id, status: run.status, createdAt: run.createdAt }, { status: 201 });
   } catch (error) {
     if (error instanceof ApprovalDeniedError) {
-      return Response.json({ error: "approval_denied", message: error.message }, { status: 403 });
+      return Response.json({ error: autoErrorCodeSchema.enum.approval_denied, message: error.message }, { status: 403 });
     }
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     if (error instanceof InsufficientComputeBalanceError) {
       return Response.json(
-        { error: "insufficient_balance", message: error.message, requiredCents: error.requiredCents },
+        { error: autoErrorCodeSchema.enum.insufficient_balance, message: error.message, requiredCents: error.requiredCents },
         { status: 402 }
       );
     }

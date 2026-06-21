@@ -4,6 +4,7 @@
 // Auth: WorkOS device-auth BEARER token (requireForgeUser) — NEVER the AuthKit
 // cookie (CLAUDE.md hard rule #4). The cookie sibling lives at
 // /api/auto/runs/inputs/upload-url. Same body + response as the cookie sibling.
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
 import {
   AutoValidationError,
@@ -48,10 +49,10 @@ export async function POST(request: Request) {
     return Response.json(result, { status: 200 });
   } catch (error) {
     if (error instanceof InputStorageUnconfiguredError) {
-      return Response.json({ error: "inputs_unconfigured", message: error.message }, { status: 503 });
+      return Response.json({ error: autoErrorCodeSchema.enum.inputs_unconfigured, message: error.message }, { status: 503 });
     }
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     throw error;
   }

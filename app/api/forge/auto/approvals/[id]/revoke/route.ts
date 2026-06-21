@@ -2,6 +2,7 @@
 //
 // Auth: WorkOS device-auth bearer (requireForgeUser). Ownership-checked; missing /
 // cross-user → 404.
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
 import { revokeApproval } from "@/server/core/auto";
 
@@ -19,6 +20,6 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   }
   const { id } = await params;
   const updated = await revokeApproval(userId, id);
-  if (!updated) return Response.json({ error: "not_found" }, { status: 404 });
+  if (!updated) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   return Response.json(updated, { status: 200 });
 }

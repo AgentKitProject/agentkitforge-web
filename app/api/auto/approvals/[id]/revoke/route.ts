@@ -2,6 +2,7 @@
 //
 // Auth: AuthKit cookie session. Ownership-checked; a missing / cross-user approval
 // returns 404 (so cross-user probing can't distinguish the two).
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireUserForApi, UnauthorizedError } from "@/lib/auth";
 import { revokeApproval } from "@/server/core/auto";
 
@@ -17,6 +18,6 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
   }
   const { id } = await params;
   const updated = await revokeApproval(userId, id);
-  if (!updated) return Response.json({ error: "not_found" }, { status: 404 });
+  if (!updated) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   return Response.json(updated, { status: 200 });
 }

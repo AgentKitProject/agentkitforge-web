@@ -71,6 +71,7 @@ import {
   type ToolDefinition
 } from "@agentkitforge/gateway-core";
 import { randomUUID } from "node:crypto";
+import { autoHookRoutes } from "@agentkitforge/contracts";
 import { awsClientEnv } from "@/server/aws-client";
 import { getAppUrl } from "@/lib/url-config";
 import { fargateDispatcher } from "@/server/core/auto-fargate-dispatcher";
@@ -1470,7 +1471,7 @@ export async function createWebhook(input: {
 /** Build the public ingest URL for a webhook id (`${APP_URL}/api/hooks/auto/{id}`). */
 export function webhookIngestUrl(webhookId: string): string {
   const base = getAppUrl().replace(/\/$/, "");
-  return `${base}/api/hooks/auto/${webhookId}`;
+  return `${base}${autoHookRoutes.ingest(webhookId)}`;
 }
 
 /** List a user's webhooks (the secretHash is never exposed by the routes; this

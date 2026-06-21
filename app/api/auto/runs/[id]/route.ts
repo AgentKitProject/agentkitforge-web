@@ -3,6 +3,7 @@
 // Auth: AuthKit cookie session. Ownership-checked; missing / cross-user → 404.
 // The run record carries NO injected kit prompt (only the kitRef), so returning
 // it never leaks protected-kit content.
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireUserForApi, UnauthorizedError } from "@/lib/auth";
 import { getRun } from "@/server/core/auto";
 
@@ -18,6 +19,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
   const { id } = await params;
   const run = await getRun(userId, id);
-  if (!run) return Response.json({ error: "not_found" }, { status: 404 });
+  if (!run) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   return Response.json(run, { status: 200 });
 }

@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@agentkitforge/auto-core": "github:AgentKitProject/agentkitauto-core",
-    "@agentkitforge/contracts": "^0.13.0",
+    "@agentkitforge/contracts": "^0.14.0",
     "@agentkitforge/core": "^0.4.0",
     "@agentkitforge/gateway-core": "github:AgentKitProject/agentkitgateway-core",
     "@agentkitforge/ui": "github:AgentKitProject/agentkitforge-ui",

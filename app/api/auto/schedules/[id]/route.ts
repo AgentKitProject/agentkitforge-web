@@ -3,6 +3,7 @@
 //
 // Auth: AuthKit cookie session. Ownership-checked; missing / cross-user → 404.
 // The bearer sibling lives at /api/forge/auto/schedules/[id].
+import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireUserForApi, UnauthorizedError } from "@/lib/auth";
 import {
   ApprovalDeniedError,
@@ -24,7 +25,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
   const { id } = await params;
   const schedule = await getSchedule(userId, id);
-  if (!schedule) return Response.json({ error: "not_found" }, { status: 404 });
+  if (!schedule) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   return Response.json(schedule, { status: 200 });
 }
 
@@ -57,14 +58,14 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
 
     const updated = await updateSchedule(userId, id, patch);
-    if (!updated) return Response.json({ error: "not_found" }, { status: 404 });
+    if (!updated) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
     return Response.json(updated, { status: 200 });
   } catch (error) {
     if (error instanceof ApprovalDeniedError) {
-      return Response.json({ error: "approval_denied", message: error.message }, { status: 403 });
+      return Response.json({ error: autoErrorCodeSchema.enum.approval_denied, message: error.message }, { status: 403 });
     }
     if (error instanceof AutoValidationError) {
-      return Response.json({ error: "invalid_request", message: error.message }, { status: 400 });
+      return Response.json({ error: autoErrorCodeSchema.enum.invalid_request, message: error.message }, { status: 400 });
     }
     throw error;
   }
@@ -80,6 +81,6 @@ export async function DELETE(_request: Request, { params }: { params: Promise<{ 
   }
   const { id } = await params;
   const ok = await deleteSchedule(userId, id);
-  if (!ok) return Response.json({ error: "not_found" }, { status: 404 });
+  if (!ok) return Response.json({ error: autoErrorCodeSchema.enum.not_found }, { status: 404 });
   return Response.json({ ok: true }, { status: 200 });
 }
