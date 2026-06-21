@@ -41,21 +41,9 @@ import { SettingsSection } from "./sections/SettingsSection";
 import { AccountSection } from "./sections/AccountSection";
 import { AboutSection } from "./sections/AboutSection";
 import { InstallTargetsSection } from "./sections/InstallTargetsSection";
+import { type SectionId, isValidSectionId } from "./section-ids";
 
 type Forge = ReturnType<typeof getForgeClient>;
-type SectionId =
-  | "my-kits"
-  | "build"
-  | "use"
-  | "run"
-  | "auto"
-  | "import"
-  | "package-export"
-  | "install-targets"
-  | "market-submit"
-  | "settings"
-  | "account"
-  | "about";
 
 // Auto green — the AgentKitAuto accent. Used both as the Auto nav icon's
 // container brand and (via brandVars) to re-theme the Auto section content.
@@ -178,6 +166,11 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
       const url = links[0];
       if (url && new URL(url).searchParams.get("import")) setSection("import");
     });
+    // Deep-link: ?section=<id> jumps to any valid section (e.g. ?section=auto)
+    const sectionParam = new URLSearchParams(window.location.search).get("section");
+    if (sectionParam && isValidSectionId(sectionParam)) {
+      setSection(sectionParam);
+    }
     // Apply persisted theme immediately on mount
     const saved = typeof window !== "undefined" ? localStorage.getItem("akf-theme") : null;
     if (saved) document.documentElement.setAttribute("data-theme", saved);
