@@ -207,62 +207,6 @@ async function noopDispatcher() {
   auto.setAutoDispatcher(async () => {});
 }
 
-describe("Phase C — webhook create (cookie)", () => {
-  beforeEach(async () => {
-    requireUserMock.mockReset();
-    resetStorage();
-    resolveProviderMock.mockReset();
-    resolveProviderMock.mockResolvedValue(null);
-    classifyKitMock.mockReset();
-    classifyKitMock.mockResolvedValue({ isProtected: false });
-    balanceMock.mockReset();
-    balanceMock.mockResolvedValue(1_000_000);
-    process.env.APP_URL = "https://forge.example";
-    requireUserMock.mockResolvedValue({ id: "user-1", email: "u@example.com" });
-    await noopDispatcher();
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("returns the plaintext secret ONCE + ingest URL, and stores only the hash", async () => {
-    seedApproval();
-    const approvalId = storageRef.current.state.approvals[0].id;
-    const { POST } = await import("@/app/api/auto/webhooks/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/webhooks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef: LOCAL_KIT, budgetCents: 50, approvalId })
-      })
-    );
-    expect(res.status).toBe(201);
-    const body = (await res.json()) as { id: string; secret: string; ingestUrl: string; secretHash?: string };
-    // Plaintext secret returned once; the ingest URL is built from APP_URL.
-    expect(typeof body.secret).toBe("string");
-    expect(body.secret.length).toBeGreaterThan(10);
-    expect(body.ingestUrl).toBe(`https://forge.example/api/hooks/auto/${body.id}`);
-    // secretHash is NEVER exposed.
-    expect(body.secretHash).toBeUndefined();
-    // The stored row carries the HASH, not the plaintext.
-    const stored = storageRef.current.state.webhooks[0];
-    expect(stored.secretHash).toBeTruthy();
-    expect(stored.secretHash).not.toBe(body.secret);
-  });
-
-  it("over-ceiling budget → 403; no matching approval → 403", async () => {
-    seedApproval(40);
-    const approvalId = storageRef.current.state.approvals[0].id;
-    const { POST } = await import("@/app/api/auto/webhooks/route");
-    const over = await POST(
-      new Request("https://forge.example/api/auto/webhooks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef: LOCAL_KIT, budgetCents: 100, approvalId })
-      })
-    );
-    expect(over.status).toBe(403);
-  });
-});
-
 describe("Phase C — webhook ingest auth (fourth path: secret only)", () => {
   beforeEach(async () => {
     requireUserMock.mockReset();
@@ -279,20 +223,18 @@ describe("Phase C — webhook ingest auth (fourth path: secret only)", () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  /** Create a webhook via the cookie route and return { id, secret }. */
+  /** Create a webhook via the core engine and return { id, secret }. */
   async function createWebhook(): Promise<{ id: string; secret: string }> {
     seedApproval();
     const approvalId = storageRef.current.state.approvals[0].id;
-    const { POST } = await import("@/app/api/auto/webhooks/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/webhooks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef: LOCAL_KIT, budgetCents: 50, approvalId })
-      })
-    );
-    const body = (await res.json()) as { id: string; secret: string };
-    return body;
+    const auto = await import("@/server/core/auto");
+    const created = await auto.createWebhook({
+      userId: "user-1",
+      kitRef: LOCAL_KIT,
+      budgetCents: 50,
+      approvalId
+    });
+    return { id: created.webhook.id, secret: created.secret };
   }
 
   it("valid secret → 202 and creates a run with trigger 'webhook' + webhookId", async () => {
@@ -371,165 +313,6 @@ describe("Phase C — webhook ingest auth (fourth path: secret only)", () => {
   });
 });
 
-describe("Phase C — approval networkPolicy + http_fetch opt-in", () => {
-  beforeEach(async () => {
-    requireUserMock.mockReset();
-    resetStorage();
-    requireUserMock.mockResolvedValue({ id: "user-1", email: "u@example.com" });
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it("allowlist policy persists hosts and keeps http_fetch in the toolAllowlist", async () => {
-    const { POST } = await import("@/app/api/auto/approvals/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/approvals", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kitRef: LOCAL_KIT,
-          toolAllowlist: ["read_file", "http_fetch"],
-          maxBudgetCents: 100,
-          networkPolicy: { mode: "allowlist", hosts: ["api.example.com", "*.githubusercontent.com"] }
-        })
-      })
-    );
-    expect(res.status).toBe(201);
-    const a = storageRef.current.state.approvals[0];
-    expect(a.networkPolicy).toEqual({ mode: "allowlist", hosts: ["api.example.com", "*.githubusercontent.com"] });
-    expect(a.toolAllowlist).toContain("http_fetch");
-  });
-
-  it("deny_all policy drops http_fetch from the toolAllowlist (no dead opt-in)", async () => {
-    const { POST } = await import("@/app/api/auto/approvals/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/approvals", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kitRef: LOCAL_KIT,
-          toolAllowlist: ["read_file", "http_fetch"],
-          maxBudgetCents: 100
-          // networkPolicy omitted → deny_all
-        })
-      })
-    );
-    expect(res.status).toBe(201);
-    const a = storageRef.current.state.approvals[0];
-    expect(a.networkPolicy).toEqual({ mode: "deny_all" });
-    expect(a.toolAllowlist).not.toContain("http_fetch");
-  });
-
-  it("allowlist with no hosts → 400", async () => {
-    const { POST } = await import("@/app/api/auto/approvals/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/approvals", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kitRef: LOCAL_KIT,
-          toolAllowlist: ["read_file"],
-          maxBudgetCents: 100,
-          networkPolicy: { mode: "allowlist", hosts: [] }
-        })
-      })
-    );
-    expect(res.status).toBe(400);
-  });
-});
-
-describe("Phase C — input upload-url + manifest threading", () => {
-  beforeEach(async () => {
-    requireUserMock.mockReset();
-    resetStorage();
-    resolveProviderMock.mockReset();
-    resolveProviderMock.mockResolvedValue(null);
-    classifyKitMock.mockReset();
-    classifyKitMock.mockResolvedValue({ isProtected: false });
-    balanceMock.mockReset();
-    balanceMock.mockResolvedValue(1_000_000);
-    process.env.AUTO_INPUTS_BUCKET = "kit-trees-bucket";
-    requireUserMock.mockResolvedValue({ id: "user-1", email: "u@example.com" });
-    await noopDispatcher();
-  });
-  afterEach(() => {
-    delete process.env.AUTO_INPUTS_BUCKET;
-    vi.restoreAllMocks();
-  });
-
-  it("upload-url returns confined paths + s3Keys under auto-inputs/ + a manifest", async () => {
-    const { POST } = await import("@/app/api/auto/runs/inputs/upload-url/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/runs/inputs/upload-url", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ files: [{ path: "data.csv" }, { path: "nested/report.json" }] })
-      })
-    );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      slots: { path: string; s3Key: string; uploadUrl: string }[];
-      inputFiles: { path: string; s3Key?: string }[];
-    };
-    // Both paths are confined under inputs/.
-    expect(body.slots).toHaveLength(2);
-    for (const slot of body.slots) {
-      expect(slot.path.startsWith("inputs/")).toBe(true);
-      expect(slot.s3Key.startsWith("auto-inputs/")).toBe(true);
-      expect(slot.uploadUrl).toBe("https://s3.example/presigned-put");
-    }
-    expect(body.inputFiles[0]).toMatchObject({ path: "inputs/data.csv" });
-  });
-
-  it("a traversal path in the upload request → 400 (path-safe)", async () => {
-    const { POST } = await import("@/app/api/auto/runs/inputs/upload-url/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/runs/inputs/upload-url", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ files: [{ path: "../../etc/passwd" }] })
-      })
-    );
-    expect(res.status).toBe(400);
-  });
-
-  it("a run created WITH an inputFiles manifest carries it on the run record", async () => {
-    seedApproval();
-    const { POST } = await import("@/app/api/auto/runs/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/runs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          kitRef: LOCAL_KIT,
-          input: { prompt: "go" },
-          budgetCents: 40,
-          inputFiles: [{ path: "inputs/data.csv", s3Key: "auto-inputs/user-1/abc/data.csv" }]
-        })
-      })
-    );
-    expect(res.status).toBe(201);
-    const run = storageRef.current.state.runs[0];
-    expect(run.inputFiles).toEqual([{ path: "inputs/data.csv", s3Key: "auto-inputs/user-1/abc/data.csv" }]);
-  });
-
-  it("upload-url with no bucket configured → 503", async () => {
-    delete process.env.AUTO_INPUTS_BUCKET;
-    // S3_BUCKET fallback also unset for this assertion.
-    const prev = process.env.S3_BUCKET;
-    delete process.env.S3_BUCKET;
-    const { POST } = await import("@/app/api/auto/runs/inputs/upload-url/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/runs/inputs/upload-url", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ files: [{ path: "data.csv" }] })
-      })
-    );
-    expect(res.status).toBe(503);
-    if (prev !== undefined) process.env.S3_BUCKET = prev;
-  });
-});
-
 describe("Phase C — auth-path separation (webhook CRUD)", () => {
   beforeEach(() => {
     jwtVerifyMock.mockReset();
@@ -542,20 +325,6 @@ describe("Phase C — auth-path separation (webhook CRUD)", () => {
     const { POST } = await import("@/app/api/forge/auto/webhooks/route");
     const res = await POST(
       new Request("https://forge.example/api/forge/auto/webhooks", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ kitRef: LOCAL_KIT, budgetCents: 50, approvalId: "appr-x" })
-      })
-    );
-    expect(res.status).toBe(401);
-    expect(storageRef.current.state.webhooks).toHaveLength(0);
-  });
-
-  it("COOKIE POST /api/auto/webhooks without a session → 401, no webhook", async () => {
-    requireUserMock.mockRejectedValue(new FakeUnauthorizedError("Sign in is required."));
-    const { POST } = await import("@/app/api/auto/webhooks/route");
-    const res = await POST(
-      new Request("https://forge.example/api/auto/webhooks", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kitRef: LOCAL_KIT, budgetCents: 50, approvalId: "appr-x" })

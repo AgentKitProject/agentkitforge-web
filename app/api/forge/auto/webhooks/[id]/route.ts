@@ -2,11 +2,11 @@
 // (BEARER auth).
 //
 // Auth: WorkOS device-auth BEARER token (requireForgeUser). Ownership-checked;
-// missing / cross-user → 404. The cookie sibling lives at /api/auto/webhooks/[id].
+// missing / cross-user → 404.
 import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
 import { deleteWebhook, getWebhook, setWebhookEnabled } from "@/server/core/auto";
-import { toPublicWebhook } from "@/app/api/auto/webhooks/shared";
+import { toPublicWebhook } from "../shared";
 
 export const dynamic = "force-dynamic";
 
