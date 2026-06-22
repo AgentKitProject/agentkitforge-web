@@ -48,6 +48,24 @@ web:
     # No tls: → Traefik's default self-signed cert (see README TLS note).
     tls: []
 
+  # DEV/SMOKE-TEST ONLY — disables TLS verification; do NOT use in production
+  # (see TLS section). Traefik serves a self-signed cert on the nip.io hosts, so
+  # the Node process would reject Dex's HTTPS issuer during OIDC discovery/token
+  # calls. This blunt flag makes Node accept it for the smoke test. The
+  # production path is cert-manager + dropping this var (README → Self-signed TLS).
+  extraEnv:
+    - name: NODE_TLS_REJECT_UNAUTHORIZED
+      value: "0"
+
+  # Resolve the ingress hosts straight to the node IP from inside the pod, so
+  # pod→ingress OIDC calls don't depend on CNI hairpin NAT (README → Hairpin).
+  hostAliases:
+    - ip: "<NODE_IP>"
+      hostnames:
+        - "dex.<NODE_IP>.nip.io"
+        - "forge.<NODE_IP>.nip.io"
+        - "market.<NODE_IP>.nip.io"
+
 # Market integration is via HTTP(S) only; AgentKitAuto stays OFF.
 auto:
   enabled: false

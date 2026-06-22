@@ -16,8 +16,11 @@ with a single static test user, then layers thin overlays onto each app's own
   `*.agentkitproject.com`. (There's a verification step below.)
 
 > ⚠️ **Test bundle, not production.** Dex uses in-memory storage and a static
-> password; Traefik serves a self-signed TLS cert. See **TLS** and **Going to
-> production** at the bottom.
+> password; Traefik serves a self-signed TLS cert. To make the 6-step flow reach
+> a Dex login with **zero TLS/DNS fiddling**, the two overlays bake in two
+> dev-only settings (TLS-verification skip + `hostAliases`) — see
+> **[Smoke test (dev TLS)](#smoke-test-dev-tls)**. See **TLS** and **Going to
+> production** at the bottom before any real rollout.
 
 ## What's in here
 
@@ -126,6 +129,33 @@ You land back in Forge, authenticated. Repeat at
 **admin** (granted by `adminEmails`; see **Admin access**). Forge's
 `marketBaseUrl` points at this Market, so import/favorites resolve against it.
 
+## Smoke test (dev TLS)
+
+To make the 6-step flow above work out-of-the-box on a single-node k3s — with
+Traefik's self-signed cert and `nip.io` hosts, **no manual TLS or DNS work** —
+both overlays (`values-forge-web.yaml`, `values-market.yaml`) ship two **dev-only**
+settings on the web pods (the Next.js pods that do server-to-server OIDC):
+
+1. **TLS-verification skip** — `web.extraEnv` sets `NODE_TLS_REJECT_UNAUTHORIZED=0`.
+   The apps do server-to-server OIDC discovery against the Dex issuer
+   (`https://dex.<NODE_IP>.nip.io/dex`), but Traefik's default cert is self-signed,
+   so the Node process would otherwise reject it. This blunt flag makes Node
+   accept the self-signed cert for the smoke test.
+2. **`hostAliases` for hairpin** — `web.hostAliases` maps `dex`, `forge`, and
+   `market` `.nip.io` hosts straight to `<NODE_IP>`, so the pods reach the ingress
+   without depending on CNI hairpin DNS quirks.
+
+Together these remove the two usual blockers (cert verification + hairpin), so the
+flow reaches the Dex login unaided. **The browser still shows a one-time
+self-signed-cert warning** at `https://forge.<NODE_IP>.nip.io` (and Dex/Market) —
+click through; that's expected for the smoke test.
+
+These are marked `DEV/SMOKE-TEST ONLY` in both overlays and are **off by default**
+in the charts (`web.extraEnv: []`, `web.hostAliases: []`). The **production path**
+is real certs via **cert-manager** + a `ClusterIssuer` and **dropping**
+`NODE_TLS_REJECT_UNAUTHORIZED` entirely (see **[Self-signed TLS](#self-signed-tls-traefik-default-cert)**
+and **Going to production**).
+
 ## How the three pieces fit together
 
 ```
@@ -190,9 +220,11 @@ OIDC requires the discovery document's `issuer` to **byte-match** the configured
 issuer, so we use **one** public issuer (`https://dex.<IP>.nip.io/dex`) for both
 the browser and the pods — do **not** split it into a separate in-cluster URL.
 
-That means **pods must reach the ingress URL**. On most single-node k3s this
-works (Traefik + ServiceLB hairpin the node IP). If a pod can't reach
-`https://dex.<IP>.nip.io/dex` (CNI without hairpin NAT), add a `hostAliases`
+That means **pods must reach the ingress URL**. The forge/market overlays
+already bake in `web.hostAliases` mapping the three nip.io hosts to `<NODE_IP>`
+(see [Smoke test (dev TLS)](#smoke-test-dev-tls)), so the web pods don't depend
+on hairpin NAT. **Dex** itself still relies on hairpin; if a pod (e.g. Dex) can't
+reach `https://dex.<IP>.nip.io/dex` (CNI without hairpin NAT), add a `hostAliases`
 entry so the hostname resolves to the node IP from inside the pod — e.g. for
 Dex add to `dex/dex-values.yaml`:
 
@@ -218,7 +250,13 @@ hosts {
 The nip.io hosts have **no real certificate** — Traefik serves its built-in
 self-signed cert. Browsers show a warning (click through for testing). More
 importantly, the **pods** verifying Dex's HTTPS issuer may reject the
-self-signed cert. Options, easiest first:
+self-signed cert.
+
+For the smoke test this is **already handled**: both overlays set
+`NODE_TLS_REJECT_UNAUTHORIZED=0` on the web pods (see
+[Smoke test (dev TLS)](#smoke-test-dev-tls)), so OIDC discovery succeeds against
+the self-signed issuer with no extra work. For a **real** deployment, drop that
+flag and pick one of the proper options below, easiest first:
 
 1. **Trust the Traefik CA in the pods** (mount it and set `NODE_EXTRA_CA_CERTS`),
    or
