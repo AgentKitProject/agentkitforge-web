@@ -9,7 +9,6 @@ export type SectionId =
   | "build"
   | "use"
   | "run"
-  | "auto"
   | "import"
   | "package-export"
   | "install-targets"
@@ -24,7 +23,6 @@ export const SECTION_IDS: ReadonlySet<string> = new Set<SectionId>([
   "build",
   "use",
   "run",
-  "auto",
   "import",
   "package-export",
   "install-targets",
@@ -33,6 +31,13 @@ export const SECTION_IDS: ReadonlySet<string> = new Set<SectionId>([
   "account",
   "about",
 ]);
+
+/**
+ * AgentKitAuto is now a standalone app (auto.agentkitproject.com); it is no
+ * longer an embedded Forge section. Web Forge links out to it instead of
+ * rendering it. The legacy `?section=auto` deep link redirects here.
+ */
+export const AUTO_APP_URL = "https://auto.agentkitproject.com";
 
 /** Returns true if `s` is a known SectionId that can be jumped to via ?section=. */
 export function isValidSectionId(s: string): s is SectionId {

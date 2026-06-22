@@ -33,7 +33,6 @@ import { MyKits } from "./sections/MyKits";
 import { BuildSection } from "./sections/BuildSection";
 import { UseSection } from "./sections/UseSection";
 import { RunSection } from "./sections/RunSection";
-import { AutoSection } from "./sections/AutoSection";
 import { ImportSection } from "./sections/ImportSection";
 import { PackageExportSection } from "./sections/PackageExportSection";
 import { MarketSubmitSection, SubmitModal } from "./sections/MarketSubmitSection";
@@ -42,13 +41,9 @@ import { SettingsSection } from "./sections/SettingsSection";
 import { AccountSection } from "./sections/AccountSection";
 import { AboutSection } from "./sections/AboutSection";
 import { InstallTargetsSection } from "./sections/InstallTargetsSection";
-import { type SectionId, isValidSectionId } from "./section-ids";
+import { type SectionId, isValidSectionId, AUTO_APP_URL } from "./section-ids";
 
 type Forge = ReturnType<typeof getForgeClient>;
-
-// Auto green — the AgentKitAuto accent. Used both as the Auto nav icon's
-// container brand and (via brandVars) to re-theme the Auto section content.
-const AUTO_GREEN = "#16a34a";
 
 type NavDef = { id: SectionId; label: string; icon: ReactNode };
 
@@ -57,7 +52,6 @@ const NAV: NavDef[] = [
   { id: "build", label: "Build", icon: <HammerIcon size={18} /> },
   { id: "use", label: "Use", icon: <PlayIcon size={18} /> },
   { id: "run", label: "Run / Chat", icon: <SparklesIcon size={18} /> },
-  { id: "auto", label: "Auto", icon: <AutoLogo size={18} title="" aria-hidden /> },
   { id: "import", label: "Import", icon: <ImportIcon size={18} /> },
   { id: "package-export", label: "Package / Export", icon: <ExportIcon size={18} /> },
   { id: "install-targets", label: "Install Targets", icon: <PlugIcon size={18} /> },
@@ -71,7 +65,6 @@ const SECTION_TITLES: Record<SectionId, { eyebrow: string; title: string }> = {
   build: { eyebrow: "Create", title: "Build an Agent Kit" },
   use: { eyebrow: "Run", title: "Use a Kit" },
   run: { eyebrow: "Run", title: "Chat with a Kit" },
-  auto: { eyebrow: "Autonomous", title: "AgentKitAuto" },
   import: { eyebrow: "Bring in", title: "Import a Kit" },
   "package-export": { eyebrow: "Distribute", title: "Package / Export" },
   "install-targets": { eyebrow: "Deploy", title: "Install Targets" },
@@ -167,8 +160,14 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
       const url = links[0];
       if (url && new URL(url).searchParams.get("import")) setSection("import");
     });
-    // Deep-link: ?section=<id> jumps to any valid section (e.g. ?section=auto)
+    // Deep-link: ?section=<id> jumps to any valid section.
     const sectionParam = new URLSearchParams(window.location.search).get("section");
+    if (sectionParam === "auto") {
+      // Auto is now a standalone app; the legacy embedded section is gone.
+      // Redirect the old deep link to the standalone Auto app.
+      window.location.replace(AUTO_APP_URL);
+      return;
+    }
     if (sectionParam && isValidSectionId(sectionParam)) {
       setSection(sectionParam);
     }
@@ -192,6 +191,18 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
       setSection(id);
     }
   }));
+
+  // Auto is a standalone app: render it as a link-out (new tab) in the rail
+  // rather than an embedded section. Keep the official AgentKitAuto icon.
+  // Insert just after "Run / Chat" to preserve its historical position.
+  const autoNavItem: SidebarNavItem = {
+    label: "Auto",
+    icon: <AutoLogo size={18} title="" aria-hidden />,
+    href: AUTO_APP_URL,
+    external: true
+  };
+  const runIdx = navItems.findIndex((n) => n.label === "Run / Chat");
+  navItems.splice(runIdx >= 0 ? runIdx + 1 : navItems.length, 0, autoNavItem);
 
   // Theme toggle + account block pinned to the bottom of the rail.
   const sidebarFooter = (
@@ -268,8 +279,6 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
             <UseSection forge={forge} kits={kits} notify={notify} />
           ) : section === "run" ? (
             <RunSection forge={forge} kits={kits} notify={notify} />
-          ) : section === "auto" ? (
-            <AutoSection kits={kits} notify={notify} />
           ) : section === "import" ? (
             <ImportSection forge={forge} notify={notify} onDone={(kitId) => { void refresh().then(() => { setSection("my-kits"); if (kitId) setOpenKitId(kitId); }); }} />
           ) : section === "package-export" ? (
