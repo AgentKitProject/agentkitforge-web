@@ -17,11 +17,23 @@
 import { withAuth } from "@workos-inc/authkit-nextjs";
 import type { StoredSession, TokenStore } from "@agentkitforge/core/market";
 
+function isOidc(): boolean {
+  return (process.env.AUTH_PROVIDER ?? "").trim().toLowerCase() === "oidc";
+}
+
 /**
  * Return the current user's WorkOS access token from the AuthKit cookie
  * session, or null when there is no signed-in session / no token.
+ *
+ * Under AUTH_PROVIDER=oidc there is no WorkOS access token to forward to hosted
+ * Market (Market submit/import is disabled for self-hosted in a later phase), so
+ * this no-ops to null rather than referencing WorkOS. Callers that gate on a
+ * null token degrade gracefully; submit-only paths throw a clean error below.
  */
 export async function getWorkosAccessToken(): Promise<string | null> {
+  if (isOidc()) {
+    return null;
+  }
   try {
     const auth = await withAuth();
     return auth.user ? auth.accessToken ?? null : null;

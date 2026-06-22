@@ -31,14 +31,14 @@ export type ForgeAuthFailureStage =
   | "missing_user_identity";
 
 export class ForgeAuthError extends Error {
-  readonly code: "NOT_SIGNED_IN" | "INVALID_TOKEN" | "SERVER_CONFIG_ERROR";
+  readonly code: "NOT_SIGNED_IN" | "INVALID_TOKEN" | "SERVER_CONFIG_ERROR" | "NOT_SUPPORTED";
   readonly status: number;
   readonly failureStage: ForgeAuthFailureStage;
   readonly authorizationHeaderPresent: boolean;
   readonly tokenLength: number;
 
   constructor(
-    code: "NOT_SIGNED_IN" | "INVALID_TOKEN" | "SERVER_CONFIG_ERROR",
+    code: "NOT_SIGNED_IN" | "INVALID_TOKEN" | "SERVER_CONFIG_ERROR" | "NOT_SUPPORTED",
     message: string,
     status: number,
     diagnostics: {
@@ -66,6 +66,19 @@ let jwksUrl: string | null = null;
  * ForgeAuthError (with an HTTP status) on any failure.
  */
 export async function requireForgeUser(request: Request): Promise<ForgeAuthenticatedUser> {
+  // Device-auth (WorkOS BEARER) is WorkOS-bound and unused for web-only
+  // self-hosted instances. Under AUTH_PROVIDER=oidc the whole /api/forge/*
+  // device-bearer surface is inert: return a clean 501 rather than attempting a
+  // WorkOS JWKS verification that cannot succeed. Hosted (workos) is unchanged.
+  if ((process.env.AUTH_PROVIDER ?? "").trim().toLowerCase() === "oidc") {
+    throw new ForgeAuthError(
+      "NOT_SUPPORTED",
+      "Forge device authentication is not available on this self-hosted instance.",
+      501,
+      { failureStage: "server_config", authorizationHeaderPresent: false, tokenLength: 0 }
+    );
+  }
+
   const authorizationHeader = request.headers.get("authorization");
   const diagnostics = getForgeAuthorizationDiagnostics(authorizationHeader);
   const token = parseBearerToken(authorizationHeader);

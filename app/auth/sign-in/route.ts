@@ -1,12 +1,8 @@
-import { getSignInUrl } from "@workos-inc/authkit-nextjs";
-import { getWorkOSRedirectUri } from "@/lib/url-config";
-import { redirect } from "next/navigation";
+import { getAuthProvider } from "@/lib/auth-provider";
+import type { NextRequest } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const signInUrl = await getSignInUrl({
-    redirectUri: getWorkOSRedirectUri()
-  });
-  redirect(signInUrl);
+export function GET(request: NextRequest) {
+  return getAuthProvider().handleSignIn(request);
 }
