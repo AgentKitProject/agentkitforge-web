@@ -1,60 +1,30 @@
-// WorkOS AuthKit cookie session helpers. Mirrors agentkitmarket-app/lib/auth.ts.
+// Thin re-exports over the SELECTED auth provider (see lib/auth-provider/).
 //
 // Web Forge is logged-in by design (unlike the local-first desktop app): every
 // API route requires an authenticated user, and all KitStore access is scoped
-// to that user's id.
-import { withAuth, type UserInfo } from "@workos-inc/authkit-nextjs";
-import type { User } from "@workos-inc/node";
+// to that user's id. The concrete backend (WorkOS/AuthKit for the hosted SaaS,
+// or a generic OIDC provider for self-hosted) is selected by `AUTH_PROVIDER`;
+// the ~40 routes here consume only the abstract `CurrentUser`, so they are
+// unaffected by which provider is active.
+import { getAuthProvider } from "./auth-provider";
+import type { CurrentUser } from "./auth-provider/types";
 
-export type CurrentUser = {
-  id: string;
-  email: string;
-  firstName?: string | null;
-  lastName?: string | null;
-};
-
-export class UnauthorizedError extends Error {
-  constructor(message = "Unauthorized") {
-    super(message);
-    this.name = "UnauthorizedError";
-  }
-}
+export type { CurrentUser } from "./auth-provider/types";
+export { UnauthorizedError } from "./auth-provider/types";
 
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  try {
-    const auth = await withAuth();
-    if (!auth.user) {
-      return null;
-    }
-    return mapWorkOSUser(auth);
-  } catch {
-    return null;
-  }
+  return getAuthProvider().getCurrentUser();
 }
 
 export async function requireUser(): Promise<CurrentUser> {
-  const auth = await withAuth({ ensureSignedIn: true });
-  return mapWorkOSUser(auth);
+  return getAuthProvider().requireUser();
 }
 
 // For API routes: throw (handled by withRoute) rather than redirect.
 export async function requireUserForApi(): Promise<CurrentUser> {
-  const user = await getCurrentUser();
-  if (!user) {
-    throw new UnauthorizedError("Sign in is required.");
-  }
-  return user;
+  return getAuthProvider().requireUserForApi();
 }
 
-function mapWorkOSUser(auth: UserInfo): CurrentUser {
-  return {
-    id: auth.user.id,
-    email: getUserEmail(auth.user) ?? "",
-    firstName: auth.user.firstName,
-    lastName: auth.user.lastName
-  };
-}
-
-export function getUserEmail(user?: Pick<User, "email"> | CurrentUser | null) {
+export function getUserEmail(user?: Pick<CurrentUser, "email"> | null) {
   return user?.email ?? null;
 }
