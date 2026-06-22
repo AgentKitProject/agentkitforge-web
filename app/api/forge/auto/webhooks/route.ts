@@ -1,11 +1,10 @@
 // /api/forge/auto/webhooks — AgentKitAuto inbound webhook triggers (BEARER auth).
 //
 // Auth: WorkOS device-auth BEARER token (requireForgeUser) — NEVER the AuthKit
-// cookie (CLAUDE.md hard rule #4). The cookie sibling lives at /api/auto/webhooks.
+// cookie (CLAUDE.md hard rule #4).
 // The PUBLIC ingest endpoint is a SEPARATE, FOURTH auth path (per-webhook secret).
 //
-//   POST → create a webhook (same body as the cookie sibling); returns the
-//          plaintext secret + ingest URL ONCE.
+//   POST → create a webhook; returns the plaintext secret + ingest URL ONCE.
 //   GET  → list the user's webhooks (secretHash never exposed).
 import { autoErrorCodeSchema } from "@agentkitforge/contracts";
 import { requireForgeUser, ForgeAuthError } from "@/lib/forge-auth";
@@ -17,7 +16,7 @@ import {
   parseDeliveryConfig,
   parseKitRef
 } from "@/server/core/auto";
-import { createWebhookResponse, webhookListResponse } from "@/app/api/auto/webhooks/shared";
+import { createWebhookResponse, webhookListResponse } from "./shared";
 
 export const dynamic = "force-dynamic";
 
