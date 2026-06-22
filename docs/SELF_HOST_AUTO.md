@@ -88,12 +88,15 @@ auto:
   enabled: true
   workerImage: "ghcr.io/agentkitproject/agentkitauto-worker:<tag>"
   billing: "free"                 # or "managed"
-  # In GitOps these live in the external (Infisical) secret instead:
-  anthropicApiKey: "sk-ant-..."   # operator BYO key / managed key
-  serviceKey: "<openssl rand -hex 32>"   # AUTO_WORKER_SERVICE_KEY
+  anthropicApiKey: "sk-ant-..."   # operator BYO key / managed key (REQUIRED)
+  # serviceKey: ""                # AUTO_WORKER_SERVICE_KEY — GENERATED when empty
   # namespace: ""                 # defaults to the release namespace
   # internalUrl: ""               # defaults to http://<release>-web
 ```
+
+`auto.serviceKey` (the `AUTO_WORKER_SERVICE_KEY` shared between the web app, the
+sweep, and the worker) is **generated** and preserved across upgrades when left
+empty, so the only Auto value you must supply is the `ANTHROPIC_API_KEY`.
 
 Enabling Auto renders, in addition to the web app:
 
@@ -104,15 +107,22 @@ Enabling Auto renders, in addition to the web app:
   `WEB_FORGE_INTERNAL_URL`, the service key + Anthropic key from the secret);
 - the per-minute **sweep CronJob**.
 
-When using an external secret (`web.secrets.existingSecret`), add the Auto keys
-to it: **`ANTHROPIC_API_KEY`** and **`AUTO_WORKER_SERVICE_KEY`**.
+When using a plain external Secret (`web.secrets.existingSecret`), add the Auto
+keys to it: **`ANTHROPIC_API_KEY`** and **`AUTO_WORKER_SERVICE_KEY`**.
 
-Apply with your normal flow, e.g.:
+Apply with your normal flow, e.g. layered on the k3s self-host preset:
 
 ```sh
-helm upgrade --install forge charts/agentkitforge-web \
-  --namespace forge --create-namespace \
-  --values your-values.yaml
+helm upgrade --install agentkitforge-web charts/agentkitforge-web \
+  --namespace agentkitforge-web --create-namespace \
+  --values charts/agentkitforge-web/values-k3s.yaml \
+  --set web.config.appUrl=https://forge.example.com \
+  --set web.auth.oidc.issuer=https://idp.example.com/realms/main \
+  --set web.auth.oidc.clientId=agentkitforge-web \
+  --set web.secrets.oidcClientSecret=<client-secret> \
+  --set auto.enabled=true \
+  --set auto.workerImage=ghcr.io/agentkitproject/agentkitauto-worker:<tag> \
+  --set auto.anthropicApiKey=sk-ant-...
 ```
 
 ## 3. Database schema
