@@ -8,7 +8,6 @@ describe("isValidSectionId", () => {
       "build",
       "use",
       "run",
-      "auto",
       "import",
       "package-export",
       "install-targets",
@@ -30,5 +29,11 @@ describe("isValidSectionId", () => {
     expect(isValidSectionId("")).toBe(false);
     expect(isValidSectionId("dashboard")).toBe(false);
     expect(isValidSectionId("AUTO")).toBe(false);
+  });
+
+  it("no longer treats 'auto' as a section (Auto is a standalone app)", () => {
+    // The embedded Auto section was removed; ForgeApp redirects ?section=auto
+    // to the standalone Auto app instead of resolving it as a section id.
+    expect(isValidSectionId("auto")).toBe(false);
   });
 });
