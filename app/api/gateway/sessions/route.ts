@@ -25,10 +25,19 @@ import {
   type GatewayCreateOpts
 } from "@/server/core/gateway-sessions";
 import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
+import { isManagedInferenceEnabled } from "@/lib/self-host";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  // Managed gateway inference is OFF on self-host (BYO-key only). Run / Chat on
+  // self-host uses the BYO path; the managed session endpoint is disabled.
+  if (!isManagedInferenceEnabled()) {
+    return Response.json(
+      { error: "managed_disabled", message: "Managed inference is not available on this instance." },
+      { status: 404 }
+    );
+  }
   let userId: string;
   try {
     userId = (await requireUserForApi()).id;

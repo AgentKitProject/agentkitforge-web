@@ -23,10 +23,18 @@ import {
   ForgeNotEntitledError
 } from "@/server/core/forge-gateway-sessions";
 import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
+import { isManagedInferenceEnabled } from "@/lib/self-host";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  // Managed gateway inference is OFF on self-host (BYO-key only).
+  if (!isManagedInferenceEnabled()) {
+    return Response.json(
+      { error: "managed_disabled", message: "Managed inference is not available on this instance." },
+      { status: 404 }
+    );
+  }
   let userId: string;
   try {
     userId = (await requireForgeUser(request)).id;

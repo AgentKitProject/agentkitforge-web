@@ -7,6 +7,7 @@
 // desktop's src/styles.css).
 import { getCurrentUser, requireUser } from "@/lib/auth";
 import { getAuthProvider } from "@/lib/auth-provider";
+import { getPublicConfig } from "@/lib/self-host";
 import { redirect } from "next/navigation";
 import ForgeApp from "./ForgeApp";
 
@@ -30,5 +31,8 @@ export default async function ForgePage() {
       redirect(url);
     }
   }
-  return <ForgeApp user={{ id: user.id, email: user.email }} />;
+  // Resolve self-host / Market / credits / ecosystem-link config on the SERVER
+  // (honors runtime env, not build-time NEXT_PUBLIC_* baking) and hand the
+  // serializable snapshot to the client app.
+  return <ForgeApp user={{ id: user.id, email: user.email }} config={getPublicConfig()} />;
 }

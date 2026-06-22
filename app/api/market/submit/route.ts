@@ -9,6 +9,8 @@
 // No automatic publishing — admin review is always required (CLAUDE.md #6).
 import { withUser } from "@/lib/api";
 import { submitKitToMarket } from "@/server/core/market-submit";
+import { getMarketBaseUrl } from "@/lib/self-host";
+import { NextResponse } from "next/server";
 import type { ListingDraft } from "@agentkitforge/core/market";
 
 export const dynamic = "force-dynamic";
@@ -19,9 +21,18 @@ export async function POST(request: Request) {
   return withUser(async (user) => {
     const body = (await request.json()) as Body;
     if (!body.kitId) throw new Error("kitId is required.");
+    // Resolve a Market URL: caller override, else the instance Market. With no
+    // Market configured (self-host without a Market) refuse — never phone home.
+    const marketBaseUrl = body.marketBaseUrl ?? getMarketBaseUrl();
+    if (!marketBaseUrl) {
+      return NextResponse.json(
+        { error: "Market submission is not available on this instance." },
+        { status: 404 }
+      );
+    }
     return submitKitToMarket(user.id, {
       kitId: body.kitId,
-      marketBaseUrl: body.marketBaseUrl,
+      marketBaseUrl,
       listingDraft: body.listingDraft,
       fileName: body.fileName
     });

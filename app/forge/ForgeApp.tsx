@@ -27,7 +27,8 @@ import {
   UserIcon
 } from "./icons";
 import { AutoLogo } from "./sections/AutoLogo";
-import type { Favorite, SessionUser, UsageInfo } from "./sections/shared";
+import type { Favorite, PublicConfig, SessionUser, UsageInfo } from "./sections/shared";
+import { ConfigProvider } from "./config-context";
 import { errMsg, fmtBytes } from "./sections/shared";
 import { MyKits } from "./sections/MyKits";
 import { BuildSection } from "./sections/BuildSection";
@@ -41,7 +42,7 @@ import { SettingsSection } from "./sections/SettingsSection";
 import { AccountSection } from "./sections/AccountSection";
 import { AboutSection } from "./sections/AboutSection";
 import { InstallTargetsSection } from "./sections/InstallTargetsSection";
-import { type SectionId, isValidSectionId, AUTO_APP_URL } from "./section-ids";
+import { type SectionId, isValidSectionId } from "./section-ids";
 
 type Forge = ReturnType<typeof getForgeClient>;
 
@@ -114,7 +115,7 @@ function useTheme(): [string, () => void] {
   return [theme, toggle];
 }
 
-export default function ForgeApp({ user }: { user: SessionUser }) {
+export default function ForgeApp({ user, config }: { user: SessionUser; config: PublicConfig }) {
   const forge: Forge = useMemo(() => getForgeClient(), []);
   const [section, setSection] = useState<SectionId>("my-kits");
   const [kits, setKits] = useState<MyKitEntry[]>([]);
@@ -164,8 +165,15 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
     const sectionParam = new URLSearchParams(window.location.search).get("section");
     if (sectionParam === "auto") {
       // Auto is now a standalone app; the legacy embedded section is gone.
-      // Redirect the old deep link to the standalone Auto app.
-      window.location.replace(AUTO_APP_URL);
+      // Redirect the old deep link to the standalone Auto app when one is
+      // configured (always on hosted; self-host only if NEXT_PUBLIC_AUTO_URL set).
+      if (config.links.autoUrl) {
+        window.location.replace(config.links.autoUrl);
+        return;
+      }
+    }
+    // Don't honor the Market-submit deep link when Market is disabled.
+    if (sectionParam === "market-submit" && !config.marketEnabled) {
       return;
     }
     if (sectionParam && isValidSectionId(sectionParam)) {
@@ -174,15 +182,17 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
     // Apply persisted theme immediately on mount
     const saved = typeof window !== "undefined" ? localStorage.getItem("akf-theme") : null;
     if (saved) document.documentElement.setAttribute("data-theme", saved);
-  }, [forge, refresh]);
+  }, [forge, refresh, config.links.autoUrl, config.marketEnabled]);
 
   const heading = openKitId
     ? { eyebrow: "Edit", title: "Kit editor" }
     : SECTION_TITLES[section];
 
   // Declarative nav for the framework AppShell. Selecting a section also clears
-  // any open kit editor (preserving the original click behavior).
-  const navItems: SidebarNavItem[] = NAV.map(({ id, label, icon }) => ({
+  // any open kit editor (preserving the original click behavior). When Market is
+  // disabled (self-host without a Market) the "Submit to Market" tab is hidden.
+  const visibleNav = config.marketEnabled ? NAV : NAV.filter((n) => n.id !== "market-submit");
+  const navItems: SidebarNavItem[] = visibleNav.map(({ id, label, icon }) => ({
     label,
     icon,
     active: section === id && !openKitId,
@@ -194,15 +204,19 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
 
   // Auto is a standalone app: render it as a link-out (new tab) in the rail
   // rather than an embedded section. Keep the official AgentKitAuto icon.
-  // Insert just after "Run / Chat" to preserve its historical position.
-  const autoNavItem: SidebarNavItem = {
-    label: "Auto",
-    icon: <AutoLogo size={18} title="" aria-hidden />,
-    href: AUTO_APP_URL,
-    external: true
-  };
-  const runIdx = navItems.findIndex((n) => n.label === "Run / Chat");
-  navItems.splice(runIdx >= 0 ? runIdx + 1 : navItems.length, 0, autoNavItem);
+  // Insert just after "Run / Chat" to preserve its historical position. Hidden
+  // on self-host unless an Auto URL is configured (no link back into our
+  // ecosystem by default).
+  if (config.links.autoUrl) {
+    const autoNavItem: SidebarNavItem = {
+      label: "Auto",
+      icon: <AutoLogo size={18} title="" aria-hidden />,
+      href: config.links.autoUrl,
+      external: true
+    };
+    const runIdx = navItems.findIndex((n) => n.label === "Run / Chat");
+    navItems.splice(runIdx >= 0 ? runIdx + 1 : navItems.length, 0, autoNavItem);
+  }
 
   // Theme toggle + account block pinned to the bottom of the rail.
   const sidebarFooter = (
@@ -229,7 +243,7 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
     ) : null;
 
   return (
-    <>
+    <ConfigProvider value={config}>
       <AppShell
         logo={<ForgeMark size={38} aria-hidden="true" />}
         brand={
@@ -285,7 +299,7 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
             <PackageExportSection forge={forge} kits={kits} notify={notify} />
           ) : section === "install-targets" ? (
             <InstallTargetsSection forge={forge} kits={kits} notify={notify} />
-          ) : section === "market-submit" ? (
+          ) : section === "market-submit" && config.marketEnabled ? (
             <MarketSubmitSection kits={kits} onPick={(id) => setSubmitKitId(id)} />
           ) : section === "settings" ? (
             <SettingsSection forge={forge} notify={notify} />
@@ -296,11 +310,11 @@ export default function ForgeApp({ user }: { user: SessionUser }) {
           )}
       </AppShell>
 
-      {submitKitId && (
+      {submitKitId && config.marketEnabled && (
         <SubmitModal forge={forge} kitId={submitKitId} notify={notify} onClose={() => setSubmitKitId(null)} />
       )}
       {toast && <div className={`akf-toast${toast.err ? " err" : ""}`}>{toast.msg}</div>}
-    </>
+    </ConfigProvider>
   );
 }
 

@@ -5,6 +5,7 @@ import { Badge, Button } from "@agentkitforge/ui";
 import { PackageIcon, StarIcon } from "../icons";
 import type { Favorite, Forge, MyKitEntry, Notify, UsageInfo } from "./shared";
 import { errMsg, fmtBytes } from "./shared";
+import { useConfig } from "../config-context";
 
 export function MyKits({
   forge,
@@ -29,6 +30,7 @@ export function MyKits({
   onImport: () => void;
   onRefresh: () => Promise<void>;
 }) {
+  const { marketEnabled } = useConfig();
   const [preview, setPreview] = useState<{ files: string[]; texts: Record<string, string> } | null>(null);
   const [updates, setUpdates] = useState<Record<string, string>>({});
 
@@ -133,7 +135,7 @@ export function MyKits({
                 >
                   Package
                 </Button>
-                <Button variant="secondary" onClick={() => onSubmit(k.kitId)}>Submit to Market</Button>
+                {marketEnabled && <Button variant="secondary" onClick={() => onSubmit(k.kitId)}>Submit to Market</Button>}
                 <Button variant="danger" onClick={() => void remove(k.kitId)}>Remove</Button>
               </div>
             </article>

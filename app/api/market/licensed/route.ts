@@ -12,6 +12,8 @@
 import { withUser } from "@/lib/api";
 import { loadCoreMarket } from "@/server/core/load-core";
 import { createForwardingStore } from "@/server/core/import-ops";
+import { getMarketBaseUrl } from "@/lib/self-host";
+import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
@@ -41,11 +43,20 @@ export async function POST(request: Request) {
   return withUser(async () => {
     const body = (await request.json()) as { slug?: string; kitId?: string; marketBaseUrl?: string };
     if (!body.slug) throw new Error("slug is required.");
+    // Resolve a Market URL: caller override → instance Market. With no Market
+    // configured (self-host without a Market) refuse — never phone home.
+    const marketBaseUrl = body.marketBaseUrl ?? getMarketBaseUrl();
+    if (!marketBaseUrl) {
+      return NextResponse.json(
+        { error: "Market preview is not available on this instance." },
+        { status: 404 }
+      );
+    }
     const market = await loadCoreMarket();
     const store = await createForwardingStore();
     const licensed = await market.fetchLicensedKit(store as never, {
       slug: body.slug,
-      marketBaseUrl: body.marketBaseUrl ?? process.env.AGENTKITMARKET_BASE_URL,
+      marketBaseUrl,
       clientId: process.env.AGENTKITPROJECT_WORKOS_CLIENT_ID ?? ""
     });
     const preview = await buildInMemoryPreview(licensed.bytes);

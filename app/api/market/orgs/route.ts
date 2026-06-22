@@ -9,14 +9,18 @@
 // only, so the UI can surface the org list and explain the gap.
 import { withUser } from "@/lib/api";
 import { getWorkosAccessToken } from "@/server/core/market-auth";
+import { getMarketBaseUrl } from "@/lib/self-host";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const MARKET_BASE = process.env.AGENTKITMARKET_BASE_URL ?? "https://market.agentkitproject.com";
-
 export async function GET() {
   return withUser(async () => {
+    // Market disabled / no Market URL: no orgs to list, never phone home.
+    const MARKET_BASE = getMarketBaseUrl();
+    if (!MARKET_BASE) {
+      return { orgs: [] };
+    }
     const token = await getWorkosAccessToken();
     if (!token) {
       return NextResponse.json({ error: "Not signed in to AgentKitProject." }, { status: 401 });

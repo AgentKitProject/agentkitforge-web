@@ -4,13 +4,18 @@
 // hard-code the Market origin and so we can add pagination/search shaping.
 // requireUserForApi is called to ensure only logged-in users browse.
 import { withUser } from "@/lib/api";
+import { getMarketBaseUrl } from "@/lib/self-host";
 
 export const dynamic = "force-dynamic";
 
-const MARKET_BASE = process.env.AGENTKITMARKET_BASE_URL ?? "https://market.agentkitproject.com";
-
 export async function GET(request: Request) {
   return withUser(async () => {
+    // Market disabled / no Market URL configured (self-host without a Market):
+    // return an empty catalog rather than silently phoning the hosted Market.
+    const MARKET_BASE = getMarketBaseUrl();
+    if (!MARKET_BASE) {
+      return { kits: [], nextCursor: null };
+    }
     const { searchParams } = new URL(request.url);
     const q = searchParams.get("q")?.trim() ?? "";
     const cursor = searchParams.get("cursor") ?? "";

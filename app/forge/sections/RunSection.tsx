@@ -17,12 +17,14 @@ import { errMsg } from "./shared";
 import { HttpError } from "@/forge-client";
 import type { GatewayStreamEvent } from "@/forge-client";
 import { CreditsPanel, InsufficientCreditsBanner, fetchCredits, type Credits } from "./CreditsPanel";
+import { useConfig } from "../config-context";
 
 type ManagedModel = { id: string; label: string; tier: string };
 type ChatMessage = { role: "user" | "assistant"; text: string; streaming?: boolean };
 type CreditsError = { message: string; requiredCents?: number; balanceCents?: number };
 
 export function RunSection({ forge, kits, notify }: { forge: Forge; kits: MyKitEntry[]; notify: Notify }) {
+  const { creditsEnabled } = useConfig();
   const [kitId, setKitId] = useState<string>("");
   const [models, setModels] = useState<ManagedModel[]>([]);
   const [model, setModel] = useState<string>("");
@@ -152,7 +154,7 @@ export function RunSection({ forge, kits, notify }: { forge: Forge; kits: MyKitE
             prompt; replies stream live and are billed to your prepaid credits.
           </p>
 
-          <CreditsPanel notify={notify} />
+          {creditsEnabled && <CreditsPanel notify={notify} />}
 
           <Field label="Kit">
             <Select value={kitId} onChange={(e) => onKitChange(e.target.value)}>

@@ -2,12 +2,15 @@
 
 import { useEffect, useState } from "react";
 import type { Forge } from "./shared";
+import { useConfig } from "../config-context";
 
 export function AboutSection({ forge }: { forge: Forge }) {
+  const { links } = useConfig();
   const [version, setVersion] = useState<string>("");
   useEffect(() => {
     void forge.getAppVersion().then(setVersion, () => setVersion("web"));
   }, [forge]);
+  const hasLinks = links.projectUrl || links.marketUrl || links.forgeUrl;
   return (
     <div className="about-screen">
       <div className="about-panel">
@@ -16,11 +19,19 @@ export function AboutSection({ forge }: { forge: Forge }) {
         <div className="about-meta">
           <p className="form-copy">Version: <span className="inline-code">{version || "…"}</span></p>
         </div>
-        <div className="about-links">
-          <a href="https://agentkitproject.com" target="_blank" rel="noreferrer">agentkitproject.com</a>
-          <a href="https://market.agentkitproject.com" target="_blank" rel="noreferrer">Market</a>
-          <a href="https://forge.agentkitproject.com" target="_blank" rel="noreferrer">Forge</a>
-        </div>
+        {hasLinks && (
+          <div className="about-links">
+            {links.projectUrl && (
+              <a href={links.projectUrl} target="_blank" rel="noreferrer">{links.projectUrl.replace(/^https?:\/\//, "")}</a>
+            )}
+            {links.marketUrl && (
+              <a href={links.marketUrl} target="_blank" rel="noreferrer">Market</a>
+            )}
+            {links.forgeUrl && (
+              <a href={links.forgeUrl} target="_blank" rel="noreferrer">Forge</a>
+            )}
+          </div>
+        )}
       </div>
       <div className="about-panel">
         <h2>Desktop-only features</h2>

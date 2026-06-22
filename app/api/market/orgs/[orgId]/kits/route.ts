@@ -9,11 +9,10 @@
 // kits are only returned to members.
 import { withUser } from "@/lib/api";
 import { getWorkosAccessToken } from "@/server/core/market-auth";
+import { getMarketBaseUrl } from "@/lib/self-host";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
-
-const MARKET_BASE = process.env.AGENTKITMARKET_BASE_URL ?? "https://market.agentkitproject.com";
 
 export async function GET(
   _request: Request,
@@ -21,6 +20,10 @@ export async function GET(
 ) {
   const { orgId } = await params;
   return withUser(async () => {
+    const MARKET_BASE = getMarketBaseUrl();
+    if (!MARKET_BASE) {
+      return { items: [] };
+    }
     const token = await getWorkosAccessToken();
     if (!token) {
       return NextResponse.json({ error: "Not signed in to AgentKitProject." }, { status: 401 });
