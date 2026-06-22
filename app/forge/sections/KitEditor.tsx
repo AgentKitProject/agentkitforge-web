@@ -5,6 +5,7 @@ import { Badge, Button, Select } from "@agentkitforge/ui";
 import { FileIcon, PackageIcon, PlugIcon } from "../icons";
 import type { Forge, Notify, ValidationReport } from "./shared";
 import { errMsg } from "./shared";
+import { useConfig } from "../config-context";
 
 type ValidationProfile = "local-valid" | "publishable" | "trusted" | "verified";
 
@@ -27,6 +28,7 @@ export function KitEditor({
   notify: Notify;
   onClose: () => void;
 }) {
+  const { marketEnabled, links } = useConfig();
   const [files, setFiles] = useState<{ path: string; content: string; encoding?: string }[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState("");
@@ -176,9 +178,11 @@ export function KitEditor({
               )}
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Button variant="secondary" style={{ textDecoration: "none" }} href={`https://market.agentkitproject.com/kits/${summary?.id ?? kitId}`} target="_blank" rel="noreferrer">
-                <StoreIconSmall /> View on Market
-              </Button>
+              {marketEnabled && links.marketUrl && (
+                <Button variant="secondary" style={{ textDecoration: "none" }} href={`${links.marketUrl}/kits/${summary?.id ?? kitId}`} target="_blank" rel="noreferrer">
+                  <StoreIconSmall /> View on Market
+                </Button>
+              )}
               <Button variant="secondary" onClick={() => setMetaOpen(false)}>Close</Button>
             </div>
           </div>

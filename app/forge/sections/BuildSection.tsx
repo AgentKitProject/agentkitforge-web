@@ -6,6 +6,7 @@ import type { Forge, MyKitEntry, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
 import { HttpError } from "@/forge-client";
 import { CreditsPanel, InsufficientCreditsBanner } from "./CreditsPanel";
+import { useConfig } from "../config-context";
 
 // ---------------------------------------------------------------------------
 // Managed model selection (GAP 2)
@@ -255,6 +256,7 @@ function ExampleDocsPanel({
 
 // --- Build with AI -----------------------------------------------------------
 function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; onOpen: (id: string) => void }) {
+  const { creditsEnabled } = useConfig();
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const [session, setSession] = useState<unknown>(null);
@@ -301,7 +303,7 @@ function BuildWithAi({ forge, notify, onOpen }: { forge: Forge; notify: Notify; 
       <div className="form-panel">
         <h2>Generate with AI</h2>
         <p className="form-copy">Uses your default AI provider if configured under Settings; otherwise managed prepaid credits. Generate a draft, optionally revise, then render into a kit.</p>
-        <CreditsPanel notify={notify} showDevGrant />
+        {creditsEnabled && <CreditsPanel notify={notify} showDevGrant />}
         <Field label="Describe the kit you want">
           <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g. A kit that reviews quarterly financial reports and flags anomalies." />
         </Field>

@@ -16,6 +16,8 @@ export type Favorite = {
 
 export type SessionUser = { id: string; email?: string } | null;
 
+export type { PublicConfig, EcosystemLinks } from "@/lib/self-host";
+
 export type PublicProvider = {
   id: string;
   name: string;

@@ -5,8 +5,10 @@ import { Badge, Button, Field, Input, Select } from "@agentkitforge/ui";
 import type { CatalogEntry, Forge, Notify, PublicProvider } from "./shared";
 import { errMsg } from "./shared";
 import { CreditsPanel } from "./CreditsPanel";
+import { useConfig } from "../config-context";
 
 export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notify }) {
+  const { creditsEnabled } = useConfig();
   const [providers, setProviders] = useState<PublicProvider[]>([]);
   const [defaultId, setDefaultId] = useState<string | undefined>(undefined);
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
@@ -75,9 +77,13 @@ export function SettingsSection({ forge, notify }: { forge: Forge; notify: Notif
   return (
     <div className="settings-screen">
       <div className="settings-panel">
-        <h2>Credits</h2>
-        <p className="form-copy">Prepaid credits power managed AI when you have no provider configured below.</p>
-        <CreditsPanel notify={notify} showDevGrant />
+        {creditsEnabled && (
+          <>
+            <h2>Credits</h2>
+            <p className="form-copy">Prepaid credits power managed AI when you have no provider configured below.</p>
+            <CreditsPanel notify={notify} showDevGrant />
+          </>
+        )}
         <h2>AI providers</h2>
         <p className="form-copy">Configure per-user AI providers (used by Build with AI). API keys are stored server-side and never sent back to the browser.</p>
         {providers.length === 0 ? (

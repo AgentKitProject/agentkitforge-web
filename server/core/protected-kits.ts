@@ -36,6 +36,7 @@ import {
 import { loadCoreMarket } from "@/server/core/load-core";
 import { unzipToTree } from "@/server/core/operations";
 import { withEphemeralTree } from "@/server/core/runner";
+import { getMarketBaseUrl } from "@/lib/self-host";
 
 /** Marker that tags a session's systemPromptRef as a protected Market kit whose
  *  prompt MUST be fetched server-side (never client-trusted) on every turn. */
@@ -106,7 +107,11 @@ export function createBearerTokenStore(accessToken: string): TokenStore {
 }
 
 function marketBaseUrl(override?: string): string | undefined {
-  return override ?? process.env.AGENTKITMARKET_BASE_URL;
+  // Per-ref override → instance Market. With no Market configured (self-host
+  // without a Market) returns undefined, so the protected-kit path fails closed
+  // (callers surface "service_unconfigured" / refuse the run) rather than calling
+  // the hosted Market.
+  return override ?? getMarketBaseUrl();
 }
 
 function clientId(): string {

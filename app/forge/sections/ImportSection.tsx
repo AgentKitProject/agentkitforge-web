@@ -5,6 +5,7 @@ import { Badge, Button, Field, Input } from "@agentkitforge/ui";
 import { StarIcon } from "../icons";
 import type { Forge, Notify } from "./shared";
 import { errMsg } from "./shared";
+import { useConfig } from "../config-context";
 
 type ImportTab = "zip" | "git" | "market" | "browse" | "org";
 
@@ -35,6 +36,7 @@ export function ImportSection({
   notify: Notify;
   onDone: (kitId?: string) => void;
 }) {
+  const { marketEnabled, links } = useConfig();
   const [tab, setTab] = useState<ImportTab>("zip");
   const [zipFile, setZipFile] = useState<File | null>(null);
   const [repoUrl, setRepoUrl] = useState("");
@@ -59,13 +61,18 @@ export function ImportSection({
   return (
     <div className="import-screen">
       <div className="segmented-control" role="tablist">
-        {([
+        {(([
           ["zip", "Upload .agentkit.zip"],
           ["git", "From Git"],
-          ["market", "From Market (slug)"],
-          ["browse", "Browse Market"],
-          ["org", "Org Kits"]
-        ] as [ImportTab, string][]).map(([id, label]) => (
+          // Market import tabs only when a Market is configured on this instance.
+          ...(marketEnabled
+            ? ([
+                ["market", "From Market (slug)"],
+                ["browse", "Browse Market"],
+                ["org", "Org Kits"]
+              ] as [ImportTab, string][])
+            : [])
+        ] as [ImportTab, string][])).map(([id, label]) => (
           <button key={id} role="tab" aria-selected={tab === id} className={`segment-button ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
             {label}
           </button>
@@ -174,6 +181,7 @@ function OrgKitsPanel({
   busy: boolean;
   setBusy: (b: boolean) => void;
 }) {
+  const { links } = useConfig();
   const [orgs, setOrgs] = useState<OrgEntry[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<OrgEntry | null>(null);
   const [kits, setKits] = useState<OrgKitEntry[]>([]);
@@ -292,15 +300,17 @@ function OrgKitsPanel({
               >
                 {kitsLoading && selectedOrg?.id === org.id ? "Loading…" : "Browse kits"}
               </Button>
-              <Button
-                variant="secondary"
-                href={`https://market.agentkitproject.com/orgs/${encodeURIComponent(org.id)}`}
-                target="_blank"
-                rel="noreferrer"
-                style={{ textDecoration: "none" }}
-              >
-                View on Market
-              </Button>
+              {links.marketUrl && (
+                <Button
+                  variant="secondary"
+                  href={`${links.marketUrl}/orgs/${encodeURIComponent(org.id)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ textDecoration: "none" }}
+                >
+                  View on Market
+                </Button>
+              )}
             </div>
           </article>
         ))}
@@ -363,6 +373,7 @@ function MarketBrowsePanel({
   busy: boolean;
   setBusy: (b: boolean) => void;
 }) {
+  const { links } = useConfig();
   const [kits, setKits] = useState<MarketKitEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -479,15 +490,17 @@ function MarketBrowsePanel({
                 <Button variant="secondary" disabled={busy} onClick={() => void favoriteKit(k.slug)}>
                   <StarIcon size={13} /> Favorite
                 </Button>
-                <Button
-                  variant="secondary"
-                  href={`https://market.agentkitproject.com/kits/${k.slug}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ textDecoration: "none" }}
-                >
-                  View on Market
-                </Button>
+                {links.marketUrl && (
+                  <Button
+                    variant="secondary"
+                    href={`${links.marketUrl}/kits/${k.slug}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ textDecoration: "none" }}
+                  >
+                    View on Market
+                  </Button>
+                )}
               </div>
             </article>
           ))}

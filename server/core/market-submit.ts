@@ -8,6 +8,7 @@
 import { loadCoreMarket } from "@/server/core/load-core";
 import { withMaterializedKit } from "@/server/core/runner";
 import { createSessionTokenStore, workosClientId } from "@/server/core/market-auth";
+import { getMarketBaseUrl } from "@/lib/self-host";
 import type { ListingDraft } from "@agentkitforge/core/market";
 
 export type SubmitInput = {
@@ -18,13 +19,19 @@ export type SubmitInput = {
 };
 
 export async function submitKitToMarket(userId: string, input: SubmitInput) {
+  // Resolve a Market URL (caller override → instance Market). With no Market
+  // configured (self-host without a Market) refuse — never phone home.
+  const marketBaseUrl = input.marketBaseUrl ?? getMarketBaseUrl();
+  if (!marketBaseUrl) {
+    throw new Error("Market submission is not available on this instance.");
+  }
   const market = await loadCoreMarket();
   // Seed a TokenStore from the live cookie-session WorkOS access token.
   const store = await createSessionTokenStore();
   return withMaterializedKit(userId, input.kitId, async ({ kitRoot }) => {
     const result = await market.submitKit(store, {
       rootPath: kitRoot,
-      marketBaseUrl: input.marketBaseUrl ?? process.env.AGENTKITMARKET_BASE_URL,
+      marketBaseUrl,
       clientId: workosClientId(),
       listingDraft: input.listingDraft,
       fileName: input.fileName

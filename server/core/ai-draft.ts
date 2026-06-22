@@ -13,6 +13,7 @@ import { loadCore } from "@/server/core/load-core";
 import { getUserSettingsStore } from "@/server/store/user-settings";
 import { runManagedChat } from "@/server/core/gateway";
 import { MANAGED_DEFAULT_MODEL, isManagedModel } from "@/server/core/managed-models";
+import { isManagedInferenceEnabled } from "@/lib/self-host";
 import type { ChatRequest } from "@agentkitforge/gateway-core";
 
 const MANAGED_MAX_TOKENS = 4000;
@@ -100,9 +101,17 @@ async function resolveBilling(
     if (!model) throw new Error(`${provider.name} model is required.`);
     return { mode: "byo", provider, model };
   }
-  // No BYO provider configured → managed prepaid credits. Only honor a
-  // requested model if it is one we actually offer + price; otherwise fall back
-  // to the balanced default (never bill against an unknown/arbitrary id).
+  // No BYO provider configured. On SELF-HOST there is no managed/platform-key
+  // path — BYO is the ONLY path — so refuse with a clear message instead of
+  // routing to the (off) managed gateway.
+  if (!isManagedInferenceEnabled()) {
+    throw new Error(
+      "No AI provider configured. Add a provider with your own API key in Settings before generating a draft."
+    );
+  }
+  // Hosted: managed prepaid credits. Only honor a requested model if it is one we
+  // actually offer + price; otherwise fall back to the balanced default (never
+  // bill against an unknown/arbitrary id).
   const requested = inputModel?.trim();
   return { mode: "managed", model: isManagedModel(requested) ? requested! : MANAGED_DEFAULT_MODEL };
 }

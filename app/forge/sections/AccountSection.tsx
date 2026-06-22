@@ -2,12 +2,11 @@
 
 import { Badge, Button } from "@agentkitforge/ui";
 import type { SessionUser } from "./shared";
-
-const MARKET_BASE_URL =
-  process.env.NEXT_PUBLIC_AGENTKITMARKET_BASE_URL ??
-  "https://market.agentkitproject.com";
+import { useConfig } from "../config-context";
 
 export function AccountSection({ user }: { user: SessionUser }) {
+  const { marketEnabled, links } = useConfig();
+  const marketBaseUrl = links.marketUrl;
   return (
     <div className="account-screen">
       <div className="account-panel">
@@ -18,11 +17,14 @@ export function AccountSection({ user }: { user: SessionUser }) {
         </div>
         <div className="button-row">
           <Button variant="secondary" href="/auth/sign-out">Sign out</Button>
-          <Button variant="secondary" href="https://profile.agentkitproject.com" target="_blank" rel="noreferrer">Manage profile</Button>
+          {links.profileUrl && (
+            <Button variant="secondary" href={links.profileUrl} target="_blank" rel="noreferrer">Manage profile</Button>
+          )}
         </div>
       </div>
 
-      {/* Market connection panel */}
+      {/* Market connection panel — only when Market is enabled on this instance. */}
+      {marketEnabled && (
       <div className="account-panel" style={{ marginTop: 20 }}>
         <h2>Market connection</h2>
         <div className="about-meta">
@@ -33,7 +35,7 @@ export function AccountSection({ user }: { user: SessionUser }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: "0.82em", color: "var(--color-text-secondary)", minWidth: 100 }}>Base URL</span>
-                <span className="inline-code" style={{ fontSize: "0.82em" }}>{MARKET_BASE_URL}</span>
+                <span className="inline-code" style={{ fontSize: "0.82em" }}>{marketBaseUrl}</span>
               </div>
               <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                 <span style={{ fontSize: "0.82em", color: "var(--color-text-secondary)", minWidth: 100 }}>Auth mode</span>
@@ -60,9 +62,12 @@ export function AccountSection({ user }: { user: SessionUser }) {
           </div>
         </div>
         <div className="button-row" style={{ marginTop: 12 }}>
-          <Button variant="secondary" href="https://market.agentkitproject.com" target="_blank" rel="noreferrer">Open AgentKitMarket</Button>
+          {marketBaseUrl && (
+            <Button variant="secondary" href={marketBaseUrl} target="_blank" rel="noreferrer">Open AgentKitMarket</Button>
+          )}
         </div>
       </div>
+      )}
 
       {/* AgentKitAuto placeholder */}
       <div className="account-panel" style={{ marginTop: 20 }}>
