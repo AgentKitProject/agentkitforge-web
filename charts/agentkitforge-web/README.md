@@ -8,11 +8,52 @@ Self-hosts the **AgentKitForge WebApp** (Next.js 15 standalone server running
 - **Bundled Postgres** (metadata + per-user settings) — persistent PVC.
 - **Bundled MinIO** (kit trees, S3-compatible) — persistent PVC; the app
   auto-creates the bucket on startup.
-- **Tailscale ingress** (`ingressClassName: tailscale`, empty host →
-  `defaultBackend` pattern, served name from `tls.hosts`).
+- Optional ingress (Traefik on k3s, or any IngressClass / Tailscale).
 
-In-cluster service URLs **auto-default**, so the external secret only carries the
-genuinely-secret values:
+For a turnkey self-host walkthrough see
+[`docs/SELF_HOSTING.md`](../../docs/SELF_HOSTING.md). The
+[`values-k3s.yaml`](./values-k3s.yaml) preset configures generic OIDC auth,
+plain k8s Secrets, BYO LLM key, and Market OFF.
+
+## Quick install (k3s)
+
+```sh
+helm install agentkitforge-web ./charts/agentkitforge-web -f ./charts/agentkitforge-web/values-k3s.yaml \
+  --set web.config.appUrl=https://forge.example.com \
+  --set web.auth.oidc.issuer=https://idp.example.com/realms/main \
+  --set web.auth.oidc.clientId=agentkitforge-web \
+  --set web.secrets.oidcClientSecret="<client secret from your IdP>"
+```
+
+## Auth model
+
+The web Forge is **logged-in by design** — every `/api/*` route requires an
+authenticated user. Two pluggable providers (`web.auth.provider`):
+
+- **`oidc`** (self-host): generic OpenID Connect (Auth Code + PKCE), sealed with
+  iron-session. Set `web.auth.oidc.{issuer,clientId}` +
+  `web.secrets.oidcClientSecret`. This also marks the instance self-hosted
+  (Market off by default, BYO LLM only, ecosystem links hidden unless set).
+- **`workos`** (default; hosted SaaS): WorkOS AuthKit cookie sessions.
+
+## Generated secrets
+
+The chart-managed Secret holds every genuinely-secret value. Anything you don't
+supply that the chart *can* generate is **generated and preserved across
+`helm upgrade`** (via `lookup` of the live Secret) — so nothing is ever
+`changeme`:
+
+- `SESSION_SECRET` (OIDC) / `WORKOS_COOKIE_PASSWORD` (you supply for WorkOS)
+- `AGENTKITFORGE_WEB_SECRET` (AES-256-GCM at-rest key for per-user LLM keys)
+- `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- `AUTO_WORKER_SERVICE_KEY` (when `auto.enabled`)
+
+You always supply the genuinely-external secrets: the OIDC client secret (or
+WorkOS API key/client id) and, for Auto, the `ANTHROPIC_API_KEY`.
+
+## Auto-defaulted in-cluster URLs
+
+So the secret only carries genuinely-secret values:
 
 - `DATABASE_URL` is composed from `postgres.user/database` + the secret's
   `POSTGRES_PASSWORD`, pointing at the bundled Postgres Service.
@@ -20,68 +61,26 @@ genuinely-secret values:
   `minio.bucket`; `S3_ACCESS_KEY_ID` defaults to `minio.rootUser`;
   `S3_SECRET_ACCESS_KEY` reads the secret's `MINIO_ROOT_PASSWORD`.
 
-When `postgres.enabled`/`minio.enabled` are true, any `DATABASE_URL`/`S3_ENDPOINT`
-keys in the external secret are **ignored** (the chart's composed values win). To
-use an external Postgres/MinIO, set `postgres.enabled=false` / `minio.enabled=false`
-and provide `DATABASE_URL` / `S3_ENDPOINT` (+ `S3_*`) in the secret.
+To use an **external** Postgres/MinIO, set `postgres.enabled=false` /
+`minio.enabled=false` and provide `DATABASE_URL` / `S3_ENDPOINT` (+ `S3_*`) in
+the secret.
 
-## Auth model
+## Bring your own Secret (GitOps)
 
-The web Forge is **logged-in by design** — every `/api/*` route requires an
-authenticated WorkOS AuthKit user. WorkOS config is therefore required for the app
-to be usable (the `/health` probe works regardless).
+Set `web.secrets.existingSecret` to a plain Secret you manage. The chart then
+renders **no** Secret of its own; the web container `envFrom`s it, and the
+bundled Postgres/MinIO read their passwords from it. Required keys:
 
-## GitOps with an external (Infisical) secret
+- **oidc**: `OIDC_CLIENT_SECRET`, `SESSION_SECRET`, `AGENTKITFORGE_WEB_SECRET`,
+  `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`
+- **workos**: `WORKOS_API_KEY`, `WORKOS_CLIENT_ID`, `WORKOS_COOKIE_PASSWORD`,
+  `AGENTKITFORGE_WEB_SECRET`, `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`
 
-Set `web.secrets.existingSecret` to a Secret you manage externally (synced by
-Infisical). The chart then does **not** render its own secret; the web container
-`envFrom`s it, and the bundled Postgres/MinIO read their passwords from it.
+A clean ArgoCD Application example is at
+[`deploy/argocd-example/agentkitforge-web-app.yaml`](../../deploy/argocd-example/agentkitforge-web-app.yaml).
 
-### Required keys in the external secret
+## AgentKitAuto
 
-The homelab GitOps `InfisicalSecret` syncs `/k8s/agentkitforge-web` into a Secret
-named **`agentkitforge-web-secrets`**. Populate these keys in Infisical:
-
-| Key | Purpose |
-|---|---|
-| `WORKOS_API_KEY` | WorkOS AuthKit API key |
-| `WORKOS_CLIENT_ID` | WorkOS client id |
-| `WORKOS_COOKIE_PASSWORD` | Session cookie password (**≥ 32 chars**) |
-| `AGENTKITFORGE_WEB_SECRET` | AES-256-GCM key for at-rest encryption of per-user AI provider keys |
-| `APP_URL` | Public origin, e.g. `https://agentkitforge-web.tailf14b5e.ts.net` |
-| `WORKOS_REDIRECT_URI` | e.g. `https://agentkitforge-web.tailf14b5e.ts.net/auth/callback` |
-| `AGENTKITMARKET_BASE_URL` | Market base URL for import/favorites/licensed flows |
-| `POSTGRES_PASSWORD` | Bundled Postgres password |
-| `MINIO_ROOT_PASSWORD` | Bundled MinIO root password (= `S3_SECRET_ACCESS_KEY`) |
-
-`S3_ACCESS_KEY_ID` is set from `minio.rootUser` (default `minioadmin`) — keep it
-in sync with whatever you set, or override `minio.rootUser`.
-
-Optional keys: `AGENTKITPROJECT_WORKOS_CLIENT_ID` (device/licensed flows;
-usually equals `WORKOS_CLIENT_ID`).
-
-When **AgentKitAuto** is enabled (`auto.enabled=true`), also add:
-
-| Key | Purpose |
-|---|---|
-| `ANTHROPIC_API_KEY` | Inference key — operator BYO key (free) or managed key |
-| `AUTO_WORKER_SERVICE_KEY` | Service key the sweep + worker present to the internal Auto endpoints (`openssl rand -hex 32`) |
-
-See [`docs/SELF_HOST_AUTO.md`](../../docs/SELF_HOST_AUTO.md) for the full Auto
-self-host guide (worker image, RBAC, sweep CronJob, billing policy).
-
-> Until those keys exist in Infisical, the `agentkitforge-web-secrets` Secret is
-> empty/absent and the web pod will **crashloop / stay pending** — this is
-> expected during GitOps bootstrap.
-
-## Quick install (non-GitOps, inline secrets)
-
-```sh
-helm install agentkitforge-web ./charts/agentkitforge-web \
-  --set web.secrets.workosApiKey=sk_... \
-  --set web.secrets.workosClientId=client_... \
-  --set web.secrets.workosCookiePassword="$(openssl rand -base64 32)" \
-  --set web.secrets.forgeWebSecret="$(openssl rand -base64 32)" \
-  --set web.config.appUrl=https://forge.example.ts.net \
-  --set postgres.password=... --set minio.rootPassword=...
-```
+Enable autonomous runs with `auto.enabled=true` (off by default). See
+[`docs/SELF_HOST_AUTO.md`](../../docs/SELF_HOST_AUTO.md) for the worker image,
+RBAC, sweep CronJob, and billing policy.
