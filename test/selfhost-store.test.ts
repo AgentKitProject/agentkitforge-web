@@ -90,6 +90,24 @@ describe("SelfHostKitStore (pg-mem + fake MinIO)", () => {
   });
 });
 
+describe("SelfHostKitStore S3 forcePathStyle", () => {
+  async function resolveForcePathStyle(store: SelfHostKitStore): Promise<boolean> {
+    const s3 = (store as any).s3;
+    const v = s3.config.forcePathStyle;
+    return typeof v === "function" ? await v() : v;
+  }
+
+  it("defaults forcePathStyle to true (MinIO/self-host)", async () => {
+    const store = new SelfHostKitStore(makePool(), cfg);
+    expect(await resolveForcePathStyle(store)).toBe(true);
+  });
+
+  it("honors s3ForcePathStyle=false (real AWS S3)", async () => {
+    const store = new SelfHostKitStore(makePool(), { ...cfg, s3ForcePathStyle: false });
+    expect(await resolveForcePathStyle(store)).toBe(false);
+  });
+});
+
 describe("SelfHostUserSettingsStore (pg-mem)", () => {
   it("encrypts at rest and never returns the key", async () => {
     process.env.AGENTKITFORGE_WEB_SECRET = "b".repeat(64);

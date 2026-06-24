@@ -40,6 +40,11 @@ export type SelfHostKitStoreConfig = {
   s3AccessKeyId: string;
   s3SecretAccessKey: string;
   region?: string;
+  /**
+   * Force path-style S3 URLs. Required for MinIO/self-host; set false for real
+   * AWS S3 (e.g. hosted on DOKS). Default true.
+   */
+  s3ForcePathStyle?: boolean;
   /** Ensure the MinIO bucket exists on startup. Default true. */
   ensureBucket?: boolean;
 };
@@ -61,7 +66,7 @@ export class SelfHostKitStore implements KitStore {
       new S3Client({
         endpoint: config.s3Endpoint,
         region: config.region ?? "us-east-1",
-        forcePathStyle: true,
+        forcePathStyle: config.s3ForcePathStyle ?? true,
         credentials: { accessKeyId: config.s3AccessKeyId, secretAccessKey: config.s3SecretAccessKey }
       });
     this.trees = new S3TreeStore(this.s3, { bucket: config.s3Bucket, prefix: config.s3Prefix });
