@@ -44,6 +44,10 @@ web:
 
   config:
     appUrl: "https://market.tailf14b5e.ts.net"
+    # Self-host: hide the hosted-Forge vendor link and point "open in Forge" at
+    # the operator's own Web Forge instead of forge.agentkitproject.com.
+    selfHost: true
+    forgeUrl: "https://forge.tailf14b5e.ts.net"
     # Dex's static-password user can't carry a `groups` claim, so for this test
     # IdP the admin is granted by EMAIL. (oidc.adminGroup below is still wired so
     # the same overlay grants admin by group against a real IdP that emits groups.)
@@ -70,6 +74,14 @@ web:
       - hosts:
           - market
 
+# Backend (api + worker) secrets are chart-generated; the only non-generated
+# value we pin is the PUBLIC MinIO endpoint used for presigned upload/download
+# URLs handed to browsers — it MUST match the minio.ingress host below so the
+# presigned URLs are externally reachable (server-side ops keep the in-cluster
+# endpoint). SigV4 is preserved through the Tailscale operator proxy.
+secrets:
+  s3PublicEndpoint: "https://minio.tailf14b5e.ts.net"
+
 # Bundled data services on local-path (k3s).
 postgres:
   enabled: true
@@ -79,6 +91,17 @@ minio:
   enabled: true
   storage:
     storageClassName: local-path
+  # Expose MinIO on the tailnet so presigned S3 URLs resolve for browser clients.
+  # Operator mints cert Secret minio.tailf14b5e.ts.net; served name from tls SHORTNAME.
+  ingress:
+    enabled: true
+    className: "tailscale"
+    host: ""
+    annotations:
+      tailscale.com/proxy-group: admin-ingress
+    tls:
+      - hosts:
+          - minio
 redis:
   enabled: true
   storage:
