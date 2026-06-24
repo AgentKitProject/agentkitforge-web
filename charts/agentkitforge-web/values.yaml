@@ -161,7 +161,7 @@ web:
 
 # ---------------------------------------------------------------------------
 # AgentKitAuto is a SEPARATE self-host app — it has its OWN Helm chart in the
-# agentkitforge-auto-web repo (charts/agentkitauto). Forge only LINKS OUT to it
+# agentkitauto-app repo (charts/agentkitauto). Forge only LINKS OUT to it
 # via web.config.ecosystemLinks.autoUrl (NEXT_PUBLIC_AUTO_URL); it does not run
 # any Auto worker/RBAC/sweep itself.
 # ---------------------------------------------------------------------------

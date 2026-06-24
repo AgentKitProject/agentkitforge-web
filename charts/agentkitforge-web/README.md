@@ -81,7 +81,7 @@ A clean ArgoCD Application example is at
 ## AgentKitAuto
 
 AgentKitAuto is a **separate self-host app** with its own Helm chart in the
-`agentkitforge-auto-web` repo (`charts/agentkitauto`) — it runs the Auto control
+`agentkitauto-app` repo (`charts/agentkitauto`) — it runs the Auto control
 plane, worker RBAC, and schedule sweep there, not in this chart. Forge only
 **links out** to it: set `web.config.ecosystemLinks.autoUrl` to the Auto app's
 public origin (`NEXT_PUBLIC_AUTO_URL`).

@@ -2,12 +2,12 @@
 # values-auto.yaml — k3s quickstart overlay for AgentKitAuto.
 #
 # AgentKitAuto is a SEPARATE self-host app. Its chart lives in the sibling
-# agentkitforge-auto-web repo (NOT this repo). Layered ON TOP of that chart's
+# agentkitauto-app repo (NOT this repo). Layered ON TOP of that chart's
 # own values-k3s.yaml preset:
 #
 #   helm install agentkitauto \
-#     ../../../agentkitforge-auto-web/charts/agentkitauto \
-#     -f ../../../agentkitforge-auto-web/charts/agentkitauto/values-k3s.yaml \
+#     ../../../agentkitauto-app/charts/agentkitauto \
+#     -f ../../../agentkitauto-app/charts/agentkitauto/values-k3s.yaml \
 #     -f values-auto.yaml \
 #     -f secrets.auto.generated.yaml \   # produced by ./gen-secrets.sh
 #     --set auto.anthropicApiKey=sk-ant-... \   # BYO LLM key (operator-supplied)
@@ -24,7 +24,7 @@
 
 web:
   image:
-    repository: ghcr.io/agentkitproject/agentkitforge-auto-web
+    repository: ghcr.io/agentkitproject/agentkitauto-app
     tag: "latest"
   auth:
     provider: "oidc"
