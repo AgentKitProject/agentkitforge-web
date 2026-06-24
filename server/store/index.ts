@@ -56,6 +56,7 @@ async function buildKitStore(): Promise<KitStore> {
         s3Prefix: process.env.S3_PREFIX,
         s3AccessKeyId: requireEnv("S3_ACCESS_KEY_ID"),
         s3SecretAccessKey: requireEnv("S3_SECRET_ACCESS_KEY"),
+        s3ForcePathStyle: (process.env.S3_FORCE_PATH_STYLE ?? "true") !== "false",
         region: process.env.AWS_REGION
       });
     }
