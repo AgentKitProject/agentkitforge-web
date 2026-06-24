@@ -18,10 +18,13 @@
 # Replace `tailf14b5e.ts.net` with YOUR tailnet suffix first (see ../README.md → sed).
 # ===========================================================================
 
-# api + worker image (public market-core image).
+# api + worker image (public market-core image). pullPolicy Always so nodes
+# always fetch the current :latest instead of pinning a stale cached layer
+# (self-host tracks :latest; flip to a release tag for pinned deploys).
 image:
   repository: ghcr.io/agentkitproject/agentkitmarket-core
   tag: "latest"
+  pullPolicy: Always
 
 # API is internal-only — reached in-cluster by the web tier. Keep its ingress off.
 api:
@@ -33,6 +36,7 @@ web:
   image:
     repository: ghcr.io/agentkitproject/agentkitmarket-app
     tag: "latest"
+    pullPolicy: Always
   authProvider: "oidc"
 
   # Reference the plain Secret you create with OIDC_CLIENT_SECRET (and optionally
