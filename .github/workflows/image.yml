@@ -6,6 +6,12 @@ on:
       - main
     tags:
       - 'v*'
+    # The app image is built from app source only — skip rebuilds for changes
+    # that don't affect it (Helm charts, the self-host deploy bundle, docs).
+    paths-ignore:
+      - 'charts/**'
+      - 'deploy/**'
+      - '**/*.md'
   workflow_dispatch:
 
 permissions:

@@ -27,6 +27,11 @@ spec:
       chart: dex
       targetRevision: 0.24.1
       helm:
+        # Pin the release name to `dex` so the Dex Service is `dex` — the
+        # bootstrap CoreDNS rewrite (-> dex.<ns>.svc.cluster.local) and the
+        # dex-ingress backend (dex:5556) reference that exact name. Without this
+        # the release name defaults to the Application name and those break.
+        releaseName: dex
         ignoreMissingValueFiles: false
         valueFiles:
           - $values/deploy/argocd-tailscale/values/values-dex.yaml
