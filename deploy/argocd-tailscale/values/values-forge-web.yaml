@@ -17,6 +17,8 @@ web:
   image:
     repository: ghcr.io/agentkitproject/agentkitforge-web
     tag: "latest"
+    # Track :latest on self-host (don't pin a stale cached layer); use a release tag for pinned deploys.
+    pullPolicy: Always
 
   # Generic OIDC → also flips the instance into self-host mode (SELF_HOST=true).
   auth:
