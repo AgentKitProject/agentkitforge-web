@@ -51,7 +51,7 @@ web:
     host: ""        # e.g. forge.example.com
     tls: []
 
-# AgentKitAuto is a SEPARATE self-host app with its OWN chart (agentkitforge-auto-web
+# AgentKitAuto is a SEPARATE self-host app with its OWN chart (agentkitauto-app
 # repo, charts/agentkitauto). To link Forge to it, set
 # web.config.ecosystemLinks.autoUrl to the Auto app's public origin.
 

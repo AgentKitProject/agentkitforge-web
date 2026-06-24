@@ -38,7 +38,7 @@ The charts themselves live in three repos (referenced by relative path below):
 
 - forge-web: `../../charts/agentkitforge-web` (this repo)
 - market: `../../../agentkitmarket-core/charts/agentkitmarket` (sibling repo)
-- auto: `../../../agentkitforge-auto-web/charts/agentkitauto` (sibling repo)
+- auto: `../../../agentkitauto-app/charts/agentkitauto` (sibling repo)
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ The charts themselves live in three repos (referenced by relative path below):
   helm repo add dex https://charts.dexidp.io && helm repo update dex
   ```
 - The three chart repos checked out as **siblings** of this repo
-  (`agentkitforge-web`, `agentkitmarket-core`, and `agentkitforge-auto-web` in
+  (`agentkitforge-web`, `agentkitmarket-core`, and `agentkitauto-app` in
   the same parent dir).
 - For AgentKitAuto runs: a **BYO `ANTHROPIC_API_KEY`** (the Auto worker uses it
   for inference) and a cluster that can pull the public Auto images.
@@ -117,13 +117,13 @@ helm install agentkitforge-web ../../charts/agentkitforge-web \
 ### 6. Install AgentKitAuto
 
 AgentKitAuto is a **separate app** — its chart lives in the sibling
-`agentkitforge-auto-web` repo. Supply your **BYO `ANTHROPIC_API_KEY`** (the Auto
+`agentkitauto-app` repo. Supply your **BYO `ANTHROPIC_API_KEY`** (the Auto
 worker uses it for inference); the worker service key is chart-generated.
 
 ```sh
 helm install agentkitauto \
-  ../../../agentkitforge-auto-web/charts/agentkitauto \
-  -f ../../../agentkitforge-auto-web/charts/agentkitauto/values-k3s.yaml \
+  ../../../agentkitauto-app/charts/agentkitauto \
+  -f ../../../agentkitauto-app/charts/agentkitauto/values-k3s.yaml \
   -f values-auto.yaml \
   -f secrets.auto.generated.yaml \
   --set auto.anthropicApiKey=sk-ant-... \
