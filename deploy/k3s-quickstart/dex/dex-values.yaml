@@ -98,3 +98,10 @@ config:
       secret: "<MARKET_OIDC_CLIENT_SECRET>"
       redirectURIs:
         - https://market.<NODE_IP>.nip.io/auth/callback
+    # --- AgentKitAuto ---
+    - id: agentkitauto
+      name: "AgentKitAuto"
+      # SED: gen-secrets.sh / README replaces this with the generated secret.
+      secret: "<AUTO_OIDC_CLIENT_SECRET>"
+      redirectURIs:
+        - https://auto.<NODE_IP>.nip.io/auth/callback

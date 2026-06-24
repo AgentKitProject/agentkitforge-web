@@ -26,17 +26,19 @@ with a single static test user, then layers thin overlays onto each app's own
 
 | File | Purpose |
 |---|---|
-| `dex/dex-values.yaml` | Dex Helm values: issuer, the static test user, 2 OIDC clients. Client secrets are `<…>` placeholders filled by `gen-secrets.sh`. |
-| `values-forge-web.yaml` | Overlay on the **forge-web** chart's `values-k3s.yaml`: OIDC→Dex, ingress host, `appUrl`, `marketBaseUrl`→our Market. |
+| `dex/dex-values.yaml` | Dex Helm values: issuer, the static test user, 3 OIDC clients. Client secrets are `<…>` placeholders filled by `gen-secrets.sh`. |
+| `values-forge-web.yaml` | Overlay on the **forge-web** chart's `values-k3s.yaml`: OIDC→Dex, ingress host, `appUrl`, `marketBaseUrl`→our Market, `autoUrl`→our Auto. |
 | `values-market.yaml` | Overlay on the **market** chart's `values-k3s.yaml`: OIDC→Dex, ingress host, `adminEmails`/`adminGroup`. |
+| `values-auto.yaml` | Overlay on the **agentkitauto** chart's `values-k3s.yaml`: OIDC→Dex, ingress host, `appUrl`, `marketBaseUrl`→our Market, k8s worker dispatch ON. |
 | `secrets.example.yaml` | The shape of the secret overlays (reference only). |
-| `gen-secrets.sh` | Generates the 2 Dex client secrets + session/admin secrets and writes the `*.generated.yaml` files. |
+| `gen-secrets.sh` | Generates the 3 Dex client secrets + session/admin secrets and writes the `*.generated.yaml` files. |
 | `.gitignore` | Keeps the generated secret files out of git. |
 
-The charts themselves live in two repos (referenced by relative path below):
+The charts themselves live in three repos (referenced by relative path below):
 
 - forge-web: `../../charts/agentkitforge-web` (this repo)
 - market: `../../../agentkitmarket-core/charts/agentkitmarket` (sibling repo)
+- auto: `../../../agentkitforge-auto-web/charts/agentkitauto` (sibling repo)
 
 ## Prerequisites
 
@@ -45,10 +47,13 @@ The charts themselves live in two repos (referenced by relative path below):
   ```sh
   helm repo add dex https://charts.dexidp.io && helm repo update dex
   ```
-- The two chart repos checked out as **siblings** of this repo
-  (`agentkitforge-web` and `agentkitmarket-core` in the same parent dir).
+- The three chart repos checked out as **siblings** of this repo
+  (`agentkitforge-web`, `agentkitmarket-core`, and `agentkitforge-auto-web` in
+  the same parent dir).
+- For AgentKitAuto runs: a **BYO `ANTHROPIC_API_KEY`** (the Auto worker uses it
+  for inference) and a cluster that can pull the public Auto images.
 
-## Clone → login, in 6 steps
+## Clone → login, in 7 steps
 
 ```sh
 cd agentkitforge-web/deploy/k3s-quickstart
@@ -56,18 +61,19 @@ cd agentkitforge-web/deploy/k3s-quickstart
 
 ### 1. Set your node IP everywhere (the ONE placeholder)
 
-`<NODE_IP>` is the only thing you edit. Substitute it across the three committed
+`<NODE_IP>` is the only thing you edit. Substitute it across the four committed
 value files (in place — your clone is disposable):
 
 ```sh
 NODE_IP=192.168.1.50            # <-- your k3s node IP
 sed -i '' "s/<NODE_IP>/$NODE_IP/g" \
-  dex/dex-values.yaml values-forge-web.yaml values-market.yaml
+  dex/dex-values.yaml values-forge-web.yaml values-market.yaml values-auto.yaml
 # (GNU sed: drop the '' after -i)
 ```
 
 This yields the hostnames:
-`dex.$NODE_IP.nip.io`, `forge.$NODE_IP.nip.io`, `market.$NODE_IP.nip.io`.
+`dex.$NODE_IP.nip.io`, `forge.$NODE_IP.nip.io`, `market.$NODE_IP.nip.io`,
+`auto.$NODE_IP.nip.io`.
 
 ### 2. Generate secrets
 
@@ -75,10 +81,10 @@ This yields the hostnames:
 ./gen-secrets.sh
 ```
 
-Mints the **two** Dex client secrets (one per app — they differ), plus the
+Mints the **three** Dex client secrets (one per app — they differ), plus the
 session/encryption/admin secrets, and writes:
 `dex/dex-values.generated.yaml`, `secrets.forge.generated.yaml`,
-`secrets.market.generated.yaml` (all git-ignored).
+`secrets.market.generated.yaml`, `secrets.auto.generated.yaml` (all git-ignored).
 
 ### 3. Install Dex (the IdP)
 
@@ -108,7 +114,28 @@ helm install agentkitforge-web ../../charts/agentkitforge-web \
   --namespace agentkit
 ```
 
-### 6. Log in
+### 6. Install AgentKitAuto
+
+AgentKitAuto is a **separate app** — its chart lives in the sibling
+`agentkitforge-auto-web` repo. Supply your **BYO `ANTHROPIC_API_KEY`** (the Auto
+worker uses it for inference); the worker service key is chart-generated.
+
+```sh
+helm install agentkitauto \
+  ../../../agentkitforge-auto-web/charts/agentkitauto \
+  -f ../../../agentkitforge-auto-web/charts/agentkitauto/values-k3s.yaml \
+  -f values-auto.yaml \
+  -f secrets.auto.generated.yaml \
+  --set auto.anthropicApiKey=sk-ant-... \
+  --namespace agentkit
+```
+
+Each Auto run becomes a one-shot Kubernetes Job in the `agentkit` namespace
+(`AUTO_DISPATCH=k8s`); a per-minute CronJob sweeps due schedules. The web pod's
+ServiceAccount gets namespaced RBAC to create those Jobs (see the chart's
+`auto-rbac.yaml`).
+
+### 7. Log in
 
 Wait for pods, then open Forge in a browser:
 
@@ -127,30 +154,34 @@ Click **Sign in** → you're redirected to Dex → log in with:
 You land back in Forge, authenticated. Repeat at
 `https://market.<NODE_IP>.nip.io` — the same user signs in and is a Market
 **admin** (granted by `adminEmails`; see **Admin access**). Forge's
-`marketBaseUrl` points at this Market, so import/favorites resolve against it.
+`marketBaseUrl` points at this Market, so import/favorites resolve against it,
+and Forge links out to Auto at `https://auto.<NODE_IP>.nip.io`. The same user
+also signs in at the Auto app and can launch autonomous runs (its
+`marketBaseUrl` resolves kits against the same Market).
 
 ## Smoke test (dev TLS)
 
-To make the 6-step flow above work out-of-the-box on a single-node k3s — with
+To make the flow above work out-of-the-box on a single-node k3s — with
 Traefik's self-signed cert and `nip.io` hosts, **no manual TLS or DNS work** —
-both overlays (`values-forge-web.yaml`, `values-market.yaml`) ship two **dev-only**
-settings on the web pods (the Next.js pods that do server-to-server OIDC):
+all three overlays (`values-forge-web.yaml`, `values-market.yaml`,
+`values-auto.yaml`) ship two **dev-only** settings on the web pods (the Next.js
+pods that do server-to-server OIDC):
 
 1. **TLS-verification skip** — `web.extraEnv` sets `NODE_TLS_REJECT_UNAUTHORIZED=0`.
    The apps do server-to-server OIDC discovery against the Dex issuer
    (`https://dex.<NODE_IP>.nip.io/dex`), but Traefik's default cert is self-signed,
    so the Node process would otherwise reject it. This blunt flag makes Node
    accept the self-signed cert for the smoke test.
-2. **`hostAliases` for hairpin** — `web.hostAliases` maps `dex`, `forge`, and
-   `market` `.nip.io` hosts straight to `<NODE_IP>`, so the pods reach the ingress
-   without depending on CNI hairpin DNS quirks.
+2. **`hostAliases` for hairpin** — `web.hostAliases` maps the `dex`, `forge`,
+   `market`, and `auto` `.nip.io` hosts straight to `<NODE_IP>`, so the pods
+   reach the ingress without depending on CNI hairpin DNS quirks.
 
 Together these remove the two usual blockers (cert verification + hairpin), so the
 flow reaches the Dex login unaided. **The browser still shows a one-time
 self-signed-cert warning** at `https://forge.<NODE_IP>.nip.io` (and Dex/Market) —
 click through; that's expected for the smoke test.
 
-These are marked `DEV/SMOKE-TEST ONLY` in both overlays and are **off by default**
+These are marked `DEV/SMOKE-TEST ONLY` in all three overlays and are **off by default**
 in the charts (`web.extraEnv: []`, `web.hostAliases: []`). The **production path**
 is real certs via **cert-manager** + a `ClusterIssuer` and **dropping**
 `NODE_TLS_REJECT_UNAUTHORIZED` entirely (see **[Self-signed TLS](#self-signed-tls-traefik-default-cert)**

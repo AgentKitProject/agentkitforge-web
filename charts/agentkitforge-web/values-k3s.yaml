@@ -51,13 +51,9 @@ web:
     host: ""        # e.g. forge.example.com
     tls: []
 
-# AgentKitAuto is OPTIONAL and OFF. To enable autonomous runs, set auto.enabled
-# and supply a worker image + ANTHROPIC_API_KEY (see docs/SELF_HOST_AUTO.md):
-#   --set auto.enabled=true \
-#   --set auto.workerImage=ghcr.io/agentkitproject/agentkitauto-worker:<tag> \
-#   --set auto.anthropicApiKey=sk-ant-...
-auto:
-  enabled: false
+# AgentKitAuto is a SEPARATE self-host app with its OWN chart (agentkitforge-auto-web
+# repo, charts/agentkitauto). To link Forge to it, set
+# web.config.ecosystemLinks.autoUrl to the Auto app's public origin.
 
 # Bundled data services on k3s' default local-path StorageClass.
 postgres:

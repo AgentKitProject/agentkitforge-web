@@ -28,11 +28,6 @@ spec:
       hostAliases:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- /* When Auto is enabled the web pod runs under a dedicated SA that has
-        RBAC to create Auto worker Jobs (see auto-rbac.yaml). */}}
-      {{- if .Values.auto.enabled }}
-      serviceAccountName: {{ include "agentkitforge-web.webServiceAccountName" . }}
-      {{- end }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -83,61 +78,6 @@ spec:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: MINIO_ROOT_PASSWORD
-                  optional: true
-            {{- end }}
-            {{- /*
-            AgentKitAuto self-host config. AUTO_DISPATCH=k8s makes the app
-            dispatch each run to a Job (server/core/auto.ts → kubeJobDispatcher).
-            The dispatcher forwards most worker env from THIS pod's env (S3/DB are
-            already present above), so we add the Auto-specific knobs + the worker
-            image/namespace + resources the dispatcher reads as AUTO_K8S_*.
-            Secrets (ANTHROPIC_API_KEY, AUTO_WORKER_SERVICE_KEY) come from the
-            effective secret. */}}
-            {{- if .Values.auto.enabled }}
-            - name: AUTO_DISPATCH
-              value: "k8s"
-            - name: AUTO_SELFHOST_BILLING
-              value: {{ .Values.auto.billing | quote }}
-            - name: AUTO_K8S_WORKER_IMAGE
-              value: {{ .Values.auto.workerImage | quote }}
-            - name: AUTO_K8S_NAMESPACE
-              value: {{ include "agentkitforge-web.autoNamespace" . | quote }}
-            {{- if .Values.auto.worker.cpuRequest }}
-            - name: AUTO_K8S_CPU_REQUEST
-              value: {{ .Values.auto.worker.cpuRequest | quote }}
-            {{- end }}
-            {{- if .Values.auto.worker.cpuLimit }}
-            - name: AUTO_K8S_CPU_LIMIT
-              value: {{ .Values.auto.worker.cpuLimit | quote }}
-            {{- end }}
-            {{- if .Values.auto.worker.memoryRequest }}
-            - name: AUTO_K8S_MEMORY_REQUEST
-              value: {{ .Values.auto.worker.memoryRequest | quote }}
-            {{- end }}
-            {{- if .Values.auto.worker.memoryLimit }}
-            - name: AUTO_K8S_MEMORY_LIMIT
-              value: {{ .Values.auto.worker.memoryLimit | quote }}
-            {{- end }}
-            - name: AUTO_K8S_TTL_SECONDS
-              value: {{ .Values.auto.worker.ttlSecondsAfterFinished | quote }}
-            - name: AUTO_K8S_SCRATCH_SIZE
-              value: {{ .Values.auto.worker.scratchSize | quote }}
-            # The in-cluster URL the worker re-fetches kit context from.
-            - name: WEB_FORGE_INTERNAL_URL
-              value: {{ include "agentkitforge-web.webInternalUrl" . | quote }}
-            # Service key the worker + sweep present to the internal endpoints.
-            - name: AUTO_WORKER_SERVICE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $secretName }}
-                  key: AUTO_WORKER_SERVICE_KEY
-                  optional: true
-            # Anthropic key for managed inference / the operator's BYO key.
-            - name: ANTHROPIC_API_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ $secretName }}
-                  key: ANTHROPIC_API_KEY
                   optional: true
             {{- end }}
             {{- /* Optional extra env vars merged verbatim into the web container.

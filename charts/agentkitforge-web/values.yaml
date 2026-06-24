@@ -160,46 +160,11 @@ web:
     #      - forge.example.com
 
 # ---------------------------------------------------------------------------
-# AgentKitAuto — self-host autonomous runs (Phase D). OFF by default.
-#
-# When enabled, the web app dispatches each Auto run to a one-shot Kubernetes Job
-# running the Auto WORKER image. Requires the worker image + ANTHROPIC_API_KEY
-# (BYO LLM key). See docs/SELF_HOST_AUTO.md.
+# AgentKitAuto is a SEPARATE self-host app — it has its OWN Helm chart in the
+# agentkitforge-auto-web repo (charts/agentkitauto). Forge only LINKS OUT to it
+# via web.config.ecosystemLinks.autoUrl (NEXT_PUBLIC_AUTO_URL); it does not run
+# any Auto worker/RBAC/sweep itself.
 # ---------------------------------------------------------------------------
-auto:
-  enabled: false
-  # The Auto worker image (AUTO_K8S_WORKER_IMAGE; built from
-  # agentkitauto-core/Dockerfile).
-  workerImage: "ghcr.io/agentkitproject/agentkitauto-worker:latest"
-  # Namespace the dispatcher creates Jobs in. Empty → the release namespace.
-  namespace: ""
-  # Self-host billing policy: "free" (default, BYO key, no metering) | "managed".
-  billing: "free"
-  # ANTHROPIC_API_KEY for inference — REQUIRED when auto.enabled=true. In free
-  # mode this is the operator's BYO key used by every run.
-  anthropicApiKey: ""
-  # Shared service key the sweep + worker present to the web app's internal
-  # endpoints (AUTO_WORKER_SERVICE_KEY). GENERATED when empty.
-  serviceKey: ""
-  # The in-cluster URL the worker + sweep reach the web app at. Empty → derived
-  # from the in-cluster web Service (http://<release>-web).
-  internalUrl: ""
-  # Per-run worker resources + lifecycle (forwarded to the Job spec via env).
-  worker:
-    cpuRequest: "250m"
-    cpuLimit: "1"
-    memoryRequest: "512Mi"
-    memoryLimit: "1Gi"
-    # Auto-delete finished Jobs after this many seconds.
-    ttlSecondsAfterFinished: 3600
-    # emptyDir size for the per-run /scratch workspace.
-    scratchSize: "1Gi"
-  # The per-minute schedule sweep (self-host equivalent of the EventBridge rule).
-  sweep:
-    enabled: true
-    schedule: "* * * * *"
-    # A tiny image with curl to POST the service key to the sweep endpoint.
-    image: "curlimages/curl:8.11.1"
 
 # ---------------------------------------------------------------------------
 # Bundled in-cluster Postgres (metadata + per-user settings).

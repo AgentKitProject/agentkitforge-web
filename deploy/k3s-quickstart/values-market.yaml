@@ -64,6 +64,7 @@ web:
         - "dex.<NODE_IP>.nip.io"
         - "forge.<NODE_IP>.nip.io"
         - "market.<NODE_IP>.nip.io"
+        - "auto.<NODE_IP>.nip.io"
 
 # Bundled data services on local-path (inherited from the chart's values-k3s;
 # restated for clarity).
