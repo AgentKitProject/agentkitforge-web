@@ -35,7 +35,7 @@ with a single static test user, then layers thin overlays onto each app's own
 
 The charts themselves live in two repos (referenced by relative path below):
 
-- forge-web: `../charts/agentkitforge-web` (this repo)
+- forge-web: `../../charts/agentkitforge-web` (this repo)
 - market: `../../../agentkitmarket-core/charts/agentkitmarket` (sibling repo)
 
 ## Prerequisites
@@ -101,8 +101,8 @@ helm install agentkitmarket ../../../agentkitmarket-core/charts/agentkitmarket \
 ### 5. Install Forge WebApp
 
 ```sh
-helm install agentkitforge-web ../charts/agentkitforge-web \
-  -f ../charts/agentkitforge-web/values-k3s.yaml \
+helm install agentkitforge-web ../../charts/agentkitforge-web \
+  -f ../../charts/agentkitforge-web/values-k3s.yaml \
   -f values-forge-web.yaml \
   -f secrets.forge.generated.yaml \
   --namespace agentkit
@@ -196,8 +196,8 @@ The whole point of self-host is no phone-home. Confirm nothing resolves or calls
 
 ```sh
 # 1. No agentkitproject.com URLs in the rendered config of either app:
-helm template agentkitforge-web ../charts/agentkitforge-web \
-  -f ../charts/agentkitforge-web/values-k3s.yaml -f values-forge-web.yaml \
+helm template agentkitforge-web ../../charts/agentkitforge-web \
+  -f ../../charts/agentkitforge-web/values-k3s.yaml -f values-forge-web.yaml \
   | grep -i agentkitproject.com || echo "OK: no agentkitproject.com in forge-web config"
 
 helm template agentkitmarket ../../../agentkitmarket-core/charts/agentkitmarket \
