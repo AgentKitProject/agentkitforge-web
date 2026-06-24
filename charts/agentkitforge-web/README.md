@@ -46,10 +46,9 @@ supply that the chart *can* generate is **generated and preserved across
 - `SESSION_SECRET` (OIDC) / `WORKOS_COOKIE_PASSWORD` (you supply for WorkOS)
 - `AGENTKITFORGE_WEB_SECRET` (AES-256-GCM at-rest key for per-user LLM keys)
 - `POSTGRES_PASSWORD`, `MINIO_ROOT_PASSWORD`
-- `AUTO_WORKER_SERVICE_KEY` (when `auto.enabled`)
 
 You always supply the genuinely-external secrets: the OIDC client secret (or
-WorkOS API key/client id) and, for Auto, the `ANTHROPIC_API_KEY`.
+WorkOS API key/client id).
 
 ## Auto-defaulted in-cluster URLs
 
@@ -81,6 +80,8 @@ A clean ArgoCD Application example is at
 
 ## AgentKitAuto
 
-Enable autonomous runs with `auto.enabled=true` (off by default). See
-[`docs/SELF_HOST_AUTO.md`](../../docs/SELF_HOST_AUTO.md) for the worker image,
-RBAC, sweep CronJob, and billing policy.
+AgentKitAuto is a **separate self-host app** with its own Helm chart in the
+`agentkitforge-auto-web` repo (`charts/agentkitauto`) — it runs the Auto control
+plane, worker RBAC, and schedule sweep there, not in this chart. Forge only
+**links out** to it: set `web.config.ecosystemLinks.autoUrl` to the Auto app's
+public origin (`NEXT_PUBLIC_AUTO_URL`).

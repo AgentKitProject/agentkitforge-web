@@ -40,6 +40,11 @@ web:
     # hosted *.agentkitproject.com ecosystem).
     marketBaseUrl: "https://market.<NODE_IP>.nip.io"
     disableMarket: false
+    # Link OUT to the in-cluster AgentKitAuto app (NEXT_PUBLIC_AUTO_URL). Auto is
+    # a SEPARATE app/chart (agentkitauto, installed via values-auto.yaml); Forge
+    # does not run it.
+    ecosystemLinks:
+      autoUrl: "https://auto.<NODE_IP>.nip.io"
 
   ingress:
     enabled: true
@@ -65,10 +70,7 @@ web:
         - "dex.<NODE_IP>.nip.io"
         - "forge.<NODE_IP>.nip.io"
         - "market.<NODE_IP>.nip.io"
-
-# Market integration is via HTTP(S) only; AgentKitAuto stays OFF.
-auto:
-  enabled: false
+        - "auto.<NODE_IP>.nip.io"
 
 # Bundled Postgres + MinIO on k3s' local-path StorageClass (inherited from the
 # chart's values-k3s.yaml; restated for clarity).
