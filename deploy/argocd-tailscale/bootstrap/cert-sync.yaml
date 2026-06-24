@@ -85,10 +85,14 @@ data:
     echo "cert-sync: copying ${SRC_NS}/${SRC_NAME} -> ${DST_NS}/${DST_NAME}"
     # Wait for the operator to mint the source cert (first stand-up: the ingress
     # may have just been created). Up to ~5 min.
+    # Wait for the cert to exist AND carry non-empty PEM data: on first stand-up
+    # (or when the Ingress is recreated) the operator may create the Secret empty
+    # and populate it moments later — copying it empty makes Dex crash-loop with
+    # "failed to find any PEM data in certificate input".
     i=0
-    until kubectl -n "$SRC_NS" get secret "$SRC_NAME" >/dev/null 2>&1; do
-      i=$((i+1)); [ "$i" -ge 60 ] && { echo "source cert not minted after 5m"; exit 1; }
-      echo "waiting for ${SRC_NS}/${SRC_NAME} ($i)..."; sleep 5
+    until [ -n "$(kubectl -n "$SRC_NS" get secret "$SRC_NAME" -o jsonpath='{.data.tls\.crt}' 2>/dev/null)" ]; do
+      i=$((i+1)); [ "$i" -ge 60 ] && { echo "source cert not populated after 5m"; exit 1; }
+      echo "waiting for ${SRC_NS}/${SRC_NAME} to carry PEM data ($i)..."; sleep 5
     done
     kubectl -n "$SRC_NS" get secret "$SRC_NAME" -o json \
       | jq --arg n "$DST_NAME" --arg ns "$DST_NS" \
